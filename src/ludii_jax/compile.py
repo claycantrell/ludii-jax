@@ -141,7 +141,7 @@ def compile(lud_text_or_path: str):
         full_text = info.full_text
         # Get just the play section text (not piece definitions)
         play_section = full_text[full_text.find("play"):] if "play" in full_text else full_text
-        play_has_add = any(kw in play_section for kw in ["move Add", "move Claim", "satisfy", "handSite"])
+        play_has_add = any(kw in play_section for kw in ["move Add", "move Claim", "satisfy", "handSite", "move Select", "move Remove"])
         play_has_movement = any(kw in play_section for kw in ["forEach Piece", "move Step", "move Hop", "move Slide", "move Leap"])
         has_placement = play_has_add or "handSite" in full_text or "Hand" in full_text
         has_movement = play_has_movement
@@ -343,8 +343,8 @@ def _build_start_fn(tree, info, topo):
             if pname in piece_names and indices:
                 placements.append((piece_names.index(pname), player, indices))
 
-    # Sites Board pattern: place "Name" (sites Board) — fill entire board
-    for m in re.finditer(r'place\s+"([^"]+)"\s+sites\s+Board', full_text):
+    # Sites Board/Empty/Outer pattern: fill cells
+    for m in re.finditer(r'place\s+"([^"]+)"\s+sites\s+(Board|Empty|Outer)', full_text):
         pname_raw = m.group(1)
         pname = resolve_name(pname_raw)
         player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
