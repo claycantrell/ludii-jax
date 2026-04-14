@@ -27,6 +27,7 @@ class GameInfo:
 
     pieces: list = field(default_factory=list)  # [PieceInfo, ...]
     piece_name_map: dict = field(default_factory=dict)  # merged name → canonical
+    piece_content: dict = field(default_factory=dict)  # name → raw definition text
 
     has_set_forward: bool = False
     is_mancala: bool = False
@@ -227,6 +228,9 @@ def _parse_piece(content: str, info: GameInfo):
         elif t in ("Neutral", "Shared"):
             owner = "both"; break
 
+    # Store piece content for merge keyword checking
+    info.piece_content[name] = content
+
     # Deduplicate
     for i, p in enumerate(info.pieces):
         if p.name == name:
@@ -246,16 +250,22 @@ def _merge_symmetric_pieces(info: GameInfo):
     if not p1 or not p2:
         return
 
+    def _movement_keywords(name):
+        content = info.piece_content.get(name, "")
+        return {kw for kw in ["Step", "Hop", "Slide", "Leap", "Forward", "Orthogonal"]
+                if kw in content}
+
     merged = set()
     for p1_idx, p1_name in p1:
         for p2_idx, p2_name in p2:
             if p2_idx in merged:
                 continue
-            # Same movement keywords → merge
-            info.pieces[p1_idx] = PieceInfo(p1_name, "both")
-            info.piece_name_map[p2_name] = p1_name
-            merged.add(p2_idx)
-            break
+            # Only merge if movement keywords match
+            if _movement_keywords(p1_name) == _movement_keywords(p2_name):
+                info.pieces[p1_idx] = PieceInfo(p1_name, "both")
+                info.piece_name_map[p2_name] = p1_name
+                merged.add(p2_idx)
+                break
 
     for idx in sorted(merged, reverse=True):
         info.pieces.pop(idx)
