@@ -61,8 +61,9 @@ def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, n
         # Vectorized check: both endpoints friendly, middle is enemy, involves last move
         is_custodial = mover_mask[ep1] & mover_mask[ep2] & enemy_mask[mid] & from_last
 
-        capture_mask = jnp.zeros(n, dtype=jnp.bool_)
-        capture_mask = capture_mask.at[mid].set(capture_mask[mid] | is_custodial)
+        capture_mask = jnp.zeros(n, dtype=jnp.int8)
+        capture_mask = capture_mask.at[mid].max(is_custodial.astype(jnp.int8))
+        capture_mask = capture_mask.astype(jnp.bool_)
 
         board = jnp.where(capture_mask[jnp.newaxis, :], EMPTY, state.board)
         return state._replace(board=board)
