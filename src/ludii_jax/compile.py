@@ -312,30 +312,48 @@ def _build_start_fn(tree, info, topo):
 
     placements = []  # [(piece_idx, player, [cell_indices])]
 
-    # Expand placement: place "Name" expand sites Left/Right/Bottom/Top
-    for m in re.finditer(r'place\s+"([^"]+)"\s+expand\s+(?:\(?sites\s+)?(Left|Right|Bottom|Top|Centre)', full_text):
+    # Expand placement: place "Name" expand sites Bottom/Top steps:N
+    for m in re.finditer(r'place\s+"([^"]+)"\s+expand\s+(?:\(?sites\s+)?(Left|Right|Bottom|Top|Centre)(?:\s+steps:?\s*(?:-\s*)?(\d+))?', full_text):
         pname_raw = m.group(1)
         region = m.group(2).lower()
+        steps_str = m.group(3)
+        # Parse steps — may be "steps: - 2 1" (expression) or "steps:2"
+        steps = 1
+        if steps_str:
+            steps = int(steps_str)
+        else:
+            # Check for expression like "steps: - 2 1" = 2-1 = 1
+            steps_match = re.search(r'steps:\s*(?:-\s*)?(\d+)\s*(\d+)?', full_text[m.start():m.start()+60])
+            if steps_match:
+                if steps_match.group(2):
+                    steps = int(steps_match.group(1)) - int(steps_match.group(2))
+                else:
+                    steps = int(steps_match.group(1))
+
         pname = resolve_name(pname_raw)
         player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
         if region == "centre":
-            # Center + adjacent cells
             cx = sum(x for x, _ in topo.site_coords) / n if n > 0 else 0
             cy = sum(y for _, y in topo.site_coords) / n if n > 0 else 0
             indices = sorted(range(n), key=lambda i: abs(topo.site_coords[i][0] - cx) + abs(topo.site_coords[i][1] - cy))[:n//3]
         elif region in topo.regions:
-            base = [i for i in range(n) if topo.regions[region][i]]
-            # Expand: add neighbors
+            base = set(i for i in range(n) if topo.regions[region][i])
+            # Expand N steps (BFS)
             expanded = set(base)
-            for idx in base:
-                for d in range(topo.max_neighbors):
-                    nb = int(topo.adjacency[d, idx])
-                    if nb < n:
-                        expanded.add(nb)
+            frontier = set(base)
+            for _ in range(steps):
+                new_frontier = set()
+                for idx in frontier:
+                    for d in range(topo.max_neighbors):
+                        nb = int(topo.adjacency[d, idx])
+                        if nb < n and nb not in expanded:
+                            new_frontier.add(nb)
+                            expanded.add(nb)
+                frontier = new_frontier
             indices = sorted(expanded)
         else:
-            quarter = max(n // 4, 1)
-            indices = list(range(quarter)) if region in ("bottom", "left") else list(range(n - quarter, n))
+            quarter = max(n // 4, 1) * (steps + 1)
+            indices = list(range(min(quarter, n))) if region in ("bottom", "left") else list(range(max(0, n - quarter), n))
         if pname in piece_names and indices:
             placements.append((piece_names.index(pname), player, indices))
 
