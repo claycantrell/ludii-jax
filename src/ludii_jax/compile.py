@@ -155,8 +155,8 @@ def compile(lud_text_or_path: str):
         is_hand_game = "Hand" in info.full_text and "handSite" in info.full_text
         board_has_start_pieces = "place" in info.start_text and '"Hand"' not in info.start_text
         # Check if play is primarily Select/Remove (pick-a-cell, not movement)
-        play_is_select = any(kw in play_section for kw in ["move Select", "move Remove"]) and \
-                          not any(kw in play_section for kw in ["move Step", "move Hop", "move Slide"])
+        play_is_select = ("move Remove" in play_section and "move Step" not in play_section and "move Hop" not in play_section) or \
+                          ("move Select" in play_section and "forEach Piece" not in play_section and "move Step" not in play_section and "move Hop" not in play_section and "move Slide" not in play_section)
         if play_is_select:
             # Select/Remove games: action = pick a cell (occupied)
             def select_legal(state):
