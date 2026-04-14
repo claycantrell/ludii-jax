@@ -58,6 +58,20 @@ def evaluate_sites(expr: str, topo: BoardTopology) -> set:
         phase = int(m.group(1))
         return {i for i in range(n) if _site_phase(i, topo) == phase}
 
+    # sites P1/P2 — player regions (use custom regions if defined, else Bottom/Top)
+    m = re.match(r'sites\s+(P[12]|Mover|Next)', expr)
+    if m:
+        tag = m.group(1)
+        # Check for custom region (from equipment regions definition)
+        region_key = tag.lower()  # "p1" or "p2"
+        if region_key in topo.regions:
+            return {i for i in range(n) if topo.regions[region_key][i]}
+        # Default: P1=Bottom, P2=Top
+        region = "bottom" if tag in ("P1", "Mover") else "top"
+        if region in topo.regions:
+            return {i for i in range(n) if topo.regions[region][i]}
+        return set()
+
     # sites Region
     m = re.match(r'sites\s+(Bottom|Top|Left|Right|Board|Empty|Outer|Centre|Center)', expr, re.IGNORECASE)
     if m:

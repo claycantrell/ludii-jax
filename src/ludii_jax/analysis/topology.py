@@ -282,7 +282,7 @@ def _concentric(board_text: str) -> BoardTopology:
                 sides = 3
             elif t.lower() == "hexagon":
                 sides = 6
-        ring_sizes = [1] + [sides * (r + 1) for r in range(rings)]
+        ring_sizes = [2 * sides] * rings
     elif nums and len(nums) >= 2:
         ring_sizes = nums
     else:
@@ -302,7 +302,7 @@ def _concentric(board_text: str) -> BoardTopology:
             vertex_idx += 1
             continue
 
-        radius = ring_idx if ring_idx > 0 else 0.5
+        radius = ring_idx + 1
         for i in range(ring_size):
             angle = 2 * math.pi * i / ring_size
             coords.append((radius * math.cos(angle), radius * math.sin(angle)))

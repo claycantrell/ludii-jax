@@ -318,8 +318,8 @@ def compile(lud_text_or_path: str):
 
     # Compile effects
     effects = []
-    # Custodial capture only for non-hop games (hop games handle capture inline)
-    if info.has_capture and not info.has_hop and "custodial" in info.full_text.lower():
+    # Custodial capture: compile when explicitly present in game text
+    if "custodial" in info.full_text.lower():
         adj_lookup = None
         effects.append(compile_custodial_capture(topo, adj_lookup, piece_idx, num_players=np))
     if info.has_score:

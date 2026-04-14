@@ -212,6 +212,36 @@ def _extract_equipment(tree, info: GameInfo):
     else:
         info.topology = build_topology("square 8")
 
+    # Extract named regions (regions P1/P2/...) and add to topology
+    from .sites import evaluate_sites
+    for item in find_all(equip, "equip_item"):
+        etype = find_child(item, "equip_type")
+        if not etype:
+            continue
+        type_str = ""
+        for c in etype.children:
+            if isinstance(c, Token):
+                type_str = str(c)
+                break
+        if type_str == "regions":
+            content = find_child(item, "equip_content")
+            content_str = get_text(content) if content else ""
+            # Parse: "P1 expand sites Bottom" or "P2 sites Top"
+            parts = content_str.split(None, 1)
+            if len(parts) >= 2:
+                region_name = parts[0].lower()  # "p1", "p2"
+                region_expr = parts[1]
+                try:
+                    cells = evaluate_sites(region_expr, info.topology)
+                    if cells:
+                        import numpy as np
+                        mask = np.zeros(info.topology.num_sites, dtype=bool)
+                        for c in cells:
+                            mask[c] = True
+                        info.topology.regions[region_name] = mask
+                except Exception:
+                    pass
+
 
 def _parse_piece(content: str, info: GameInfo):
     tokens = content.strip().split()
