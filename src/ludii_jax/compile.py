@@ -85,10 +85,11 @@ def compile(lud_text_or_path: str):
         base_start = _build_start_fn(tree, info, topo)
 
         # Dice games: always place pieces on the board
-        # Region-based (Bottom/Top) or fallback to first/last cells
         n_sites = topo.num_sites
-        p1_cells = [i for i, r in enumerate(topo.regions.get("bottom", [False]*n_sites)) if r] or list(range(min(3, n_sites // 2)))
-        p2_cells = [i for i, r in enumerate(topo.regions.get("top", [False]*n_sites)) if r] or list(range(max(n_sites - 3, n_sites // 2), n_sites))
+        # Use first/last cells (avoid bottom/top which overlap on 1-row boards)
+        num_start = min(3, n_sites // 3) or 1
+        p1_cells = list(range(num_start))
+        p2_cells = list(range(n_sites - num_start, n_sites))
 
         def dice_start(state, _base=base_start, _p1=p1_cells, _p2=p2_cells, _pi=piece_idx):
             state = _base(state)
@@ -341,6 +342,40 @@ def _build_start_fn(tree, info, topo):
                 indices = list(range(half)) if region == "bottom" else list(range(n - half, n))
             if pname in piece_names and indices:
                 placements.append((piece_names.index(pname), player, indices))
+
+    # Sites Board pattern: place "Name" (sites Board) — fill entire board
+    for m in re.finditer(r'place\s+"([^"]+)"\s+sites\s+Board', full_text):
+        pname_raw = m.group(1)
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        if pname in piece_names:
+            placements.append((piece_names.index(pname), player, list(range(n))))
+
+    # centrePoint pattern: place "Name" centrePoint
+    for m in re.finditer(r'place\s+(?:Stack\s+)?"([^"]+)"\s+centrePoint', full_text):
+        pname_raw = m.group(1)
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        center = n // 2
+        if pname in piece_names:
+            placements.append((piece_names.index(pname), player, [center]))
+
+    # Multi-coord placement: place "Name" {"A1" "C1" "E1"}
+    for m in re.finditer(r'place\s+"([^"]+)"\s+("(?:[A-Za-z]\d+)"\s*(?:"[A-Za-z]\d+"?\s*)*)', full_text):
+        pname_raw = m.group(1)
+        coords_str = m.group(2)
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        coords = re.findall(r'"([A-Za-z]\d+)"', coords_str)
+        indices = []
+        for coord in coords:
+            col = ord(coord[0].upper()) - ord('A')
+            row = int(coord[1:]) - 1
+            if topo.site_coords:
+                best = min(range(n), key=lambda i: abs(topo.site_coords[i][0] - col) + abs(topo.site_coords[i][1] - row))
+                indices.append(best)
+        if pname in piece_names and indices:
+            placements.append((piece_names.index(pname), player, indices))
 
     # Direct cell index: place "Name" N or place "Name" N count:M
     for m in re.finditer(r'place\s+(?:Stack\s+)?"([^"]+)"\s+(\d+)', full_text):
