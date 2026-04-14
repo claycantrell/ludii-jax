@@ -65,12 +65,17 @@ def compile_no_moves_loss(num_players):
     return end_fn
 
 
-def compile_captured_all(num_players):
-    """Win when opponent has no pieces left."""
+def compile_captured_all(num_players, min_pieces=3):
+    """Win when opponent has fewer than min_pieces (default 3, like NMM).
+    Only triggers after opponent has HAD at least min_pieces (captures happened)."""
     def end_fn(state):
         opponent = (state.current_player + 1) % num_players
-        opponent_has_pieces = (state.board == opponent).any()
-        won = ~opponent_has_pieces
+        opp_count = (state.board == opponent).any(axis=0).sum()
+        mover_count = (state.board == state.current_player).any(axis=0).sum()
+        total = opp_count + mover_count
+        # Only trigger after enough pieces have been placed (both players active)
+        # and opponent count has dropped below threshold from captures
+        won = (opp_count < min_pieces) & (total >= 2 * min_pieces)
         winners = jnp.where(won,
                             jnp.zeros(num_players, jnp.int8).at[state.current_player].set(1),
                             EMPTY * jnp.ones(num_players, jnp.int8))

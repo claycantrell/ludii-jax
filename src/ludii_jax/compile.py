@@ -130,6 +130,9 @@ def compile(lud_text_or_path: str):
                     if play_node:
                         play_text = get_text(play_node)
                         break
+            # Fallback: use full rules text when no play node found (phase-based games)
+            if not play_text:
+                play_text = get_text(rules_node)
 
         # Classify the PRIMARY mechanic from the play section structure
         has_phases = "phases" in play_text.lower()
@@ -154,7 +157,10 @@ def compile(lud_text_or_path: str):
         else:
             mechanic = "PLACE"
 
-        start_fn = _build_start_fn(tree, info, topo)
+        if mechanic == "MULTI_PHASE":
+            start_fn = lambda state: state  # multi-phase starts empty
+        else:
+            start_fn = _build_start_fn(tree, info, topo)
 
         # ============================================================
         # Compile based on structural mechanic
