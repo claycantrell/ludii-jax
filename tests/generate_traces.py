@@ -20,17 +20,23 @@ JAVA_SRC = os.path.join(TESTS_DIR, "generate_trace.java")
 
 # Key games to validate — cover different mechanics
 TEST_GAMES = {
-    # Placement games
+    # Placement games — simple, well-tested
     "Tic-Tac-Toe": "board/space/line/Tic-Tac-Toe.lud",
     "Gomoku": "board/space/line/Gomoku.lud",
     "Hex": "board/space/connection/Hex.lud",
     "Yavalath": "board/space/line/Yavalath.lud",
     "Reversi": "board/space/territory/Reversi.lud",
+    "Pente": "board/space/line/Pente.lud",
+
+    # More placement
+    "Havannah": "board/space/connection/Havannah.lud",
+    "Twixt": "board/space/connection/TwixT.lud",
+    "Clobber": "board/space/blocking/Clobber.lud",
 
     # Movement games
     "English Draughts": "board/war/leaping/diagonal/English Draughts.lud",
-    "Breakthrough": "board/war/replacement/eliminate/all/Breakthrough.lud",
     "Wolf and Sheep": "board/hunt/Wolf and Sheep.lud",
+    "Agon": "board/space/blocking/Agon.lud",
 
     # Mancala
     "Oware": "board/sow/two_rows/Oware.lud",
@@ -39,9 +45,9 @@ TEST_GAMES = {
     # Connection
     "Y": "board/space/connection/Y (Hex).lud",
 
-    # Line games
-    "Connect-Four": "board/space/line/Connect-Four.lud",
-    "Pente": "board/space/line/Pente.lud",
+    # Line games with effects
+    "Hasami Shogi": "board/war/custodial/Hasami Shogi.lud",
+    "Dai Hasami Shogi": "board/war/custodial/Dai Hasami Shogi.lud",
 }
 
 

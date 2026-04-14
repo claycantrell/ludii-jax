@@ -170,14 +170,35 @@ def compile(lud_text_or_path: str):
             legal_fns = []
             apply_fns = []
 
+            # Detect direction restrictions from piece definitions
+            # On 8-dir boards: diagonal=[0,2,5,7], orthogonal=[1,3,4,6], forward=[0,1,2]
+            piece_text = play_text
+            for p in info.pieces:
+                piece_text += " " + info.piece_content.get(p.name, "")
+            step_dirs = None
+            hop_dirs = None
+            if topo.max_neighbors == 8:  # square/rectangle board
+                if "Diagonal" in piece_text and "Orthogonal" not in piece_text:
+                    step_dirs = [0, 2, 5, 7]  # UL, UR, DL, DR
+                    hop_dirs = [0, 2, 5, 7]
+                elif "Orthogonal" in piece_text and "Diagonal" not in piece_text:
+                    step_dirs = [1, 3, 4, 6]  # U, L, R, D
+                    hop_dirs = [1, 3, 4, 6]
+                # Forward restriction narrows further
+                if "Forward" in piece_text:
+                    if step_dirs:
+                        step_dirs = [d for d in step_dirs if d <= 2]  # only upper half
+                    else:
+                        step_dirs = [0, 1, 2]  # UL, U, UR
+
             for pi, p in enumerate(info.pieces if info.pieces else [type('P', (), {'name': 'token'})()]):
                 if info.has_step or (not info.has_hop and not info.has_slide and not info.has_leap):
-                    l, a = compile_step(topo, slide_lookup, pi, np)
+                    l, a = compile_step(topo, slide_lookup, pi, np, directions=step_dirs)
                     legal_fns.append(l)
                     apply_fns.append(a)
                 if info.has_hop:
                     hop_over = "mover" if ("is Friend" in info.full_text and "between" in info.full_text) else "opponent"
-                    l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over)
+                    l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over, directions=hop_dirs)
                     legal_fns.append(l)
                     apply_fns.append(a)
 

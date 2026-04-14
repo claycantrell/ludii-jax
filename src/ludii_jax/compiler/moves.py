@@ -15,21 +15,35 @@ import numpy as np
 from ..runtime.state import BOARD_DTYPE, ACTION_DTYPE, EMPTY
 
 
-def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1):
-    """Compile step movement: move exactly `distance` cells."""
+def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1, directions=None):
+    """Compile step movement: move exactly `distance` cells.
+
+    directions: list of neighbor indices to allow (None = all).
+    E.g. for diagonal-only on 8-dir board: [0, 2, 5, 7]
+    """
     n = topology.num_sites
     max_nb = topology.max_neighbors
     adj = jnp.array(topology.adjacency)
     arange_n = jnp.arange(n, dtype=jnp.int32)
 
+    # Direction mask: which neighbor indices are allowed
+    if directions is not None:
+        dir_mask = jnp.zeros(max_nb, dtype=jnp.bool_)
+        for d in directions:
+            if d < max_nb:
+                dir_mask = dir_mask.at[d].set(True)
+    else:
+        dir_mask = jnp.ones(max_nb, dtype=jnp.bool_)
+
     def legal_fn(state):
         owned = (state.board[piece_idx] == state.current_player)
         friendly = (state.board == state.current_player).any(axis=0)
-        # Can step to empty OR enemy cells (not friendly)
         dests = slide_lookup[:, :, distance]  # (max_nb, n)
         on_board = dests < n
         dest_not_friendly = ~friendly.at[dests.clip(0, n - 1)].get()
-        valid = owned[jnp.newaxis, :] & dest_not_friendly & on_board  # (max_nb, n)
+        valid = owned[jnp.newaxis, :] & dest_not_friendly & on_board
+        # Apply direction restriction
+        valid = valid & dir_mask[:, jnp.newaxis]  # (max_nb, n)
         # Scatter to flat mask
         flat_idx = arange_n[jnp.newaxis, :] * n + dests.clip(0, n - 1)
         mask = jnp.zeros(n * n, dtype=BOARD_DTYPE)
@@ -48,12 +62,19 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1):
 
 
 def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
-                hop_over="opponent", capture=True):
+                hop_over="opponent", capture=True, directions=None):
     """Compile hop movement: jump over a piece to land beyond it."""
     n = topology.num_sites
     max_nb = topology.max_neighbors
     arange_n = jnp.arange(n, dtype=jnp.int32)
     hop_over_friendly = (hop_over == "mover")
+
+    if directions is not None:
+        dir_mask = jnp.zeros(max_nb, dtype=jnp.bool_)
+        for d in directions:
+            if d < max_nb: dir_mask = dir_mask.at[d].set(True)
+    else:
+        dir_mask = jnp.ones(max_nb, dtype=jnp.bool_)
 
     def legal_fn(state):
         owned = (state.board[piece_idx] == state.current_player)
@@ -67,6 +88,7 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
         on_board = dests < n
         has_hop_piece = hop_mask.at[between.clip(0, n - 1)].get()
         valid = owned[jnp.newaxis, :] & on_board & has_hop_piece.astype(jnp.bool_)
+        valid = valid & dir_mask[:, jnp.newaxis]  # direction restriction
 
         if hop_over_friendly:
             enemy = ((state.board != EMPTY) & (state.board != state.current_player)).any(axis=0)
@@ -268,8 +290,20 @@ def compile_sow(topology, num_players, initial_seeds=4, has_stores=True):
             return counts.at[cell].add(1)
 
         sc = jax.lax.fori_loop(0, seeds, sow_one, sc)
-        pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(pit)).at[num_players].set(ACTION_DTYPE(pit))
-        return state._replace(seed_counts=sc, previous_actions=pa)
+
+        # Find where last seed landed
+        last_pos = (start_pos + seeds) % track_len
+        last_cell = track_arr[last_pos]
+
+        # Extra turn if last seed landed in player's store
+        landed_in_own_store = is_store[last_cell] & (state.pit_owner[last_cell] == state.current_player)
+
+        # Update phase_step_count: if extra turn, don't advance (subtract 1 so next player calc stays same)
+        phase_adj = jax.lax.select(landed_in_own_store, BOARD_DTYPE(-1), BOARD_DTYPE(0))
+
+        pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(pit)).at[num_players].set(ACTION_DTYPE(last_cell))
+        return state._replace(seed_counts=sc, previous_actions=pa,
+                              phase_step_count=state.phase_step_count + phase_adj)
 
     return legal_fn, apply_fn, initial_seeds, pit_owner_init
 
