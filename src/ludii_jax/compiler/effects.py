@@ -11,15 +11,22 @@ from ..runtime.state import BOARD_DTYPE, ACTION_DTYPE, REWARD_DTYPE, EMPTY
 
 
 def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, num_players=2):
-    """Custodial capture: remove enemy pieces sandwiched between friendly pieces."""
+    """Custodial capture: remove enemy pieces sandwiched between friendly pieces.
+
+    Vectorized: precompute all (endpoint1, middle, endpoint2) triples as arrays,
+    then check all at once with JAX indexing.
+    """
+    import numpy as np
     n = topology.num_sites
 
-    # Precompute custodial line indices
-    lines = []
+    # Precompute custodial triples: (endpoint1, middle, endpoint2) for length=1
+    endpoints1 = []
+    middles = []
+    endpoints2 = []
     for d in range(topology.max_neighbors):
         for site in range(n):
-            line = [site]
             pos = site
+            line = [site]
             for _ in range(length + 1):
                 next_pos = int(topology.adjacency[d, pos])
                 if next_pos >= n:
@@ -27,25 +34,27 @@ def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, n
                 line.append(next_pos)
                 pos = next_pos
             if len(line) >= length + 2:
-                lines.append(line[:length + 2])
+                endpoints1.append(line[0])
+                middles.append(line[1])  # for length=1, single middle
+                endpoints2.append(line[-1])
 
-    if not lines:
+    if not endpoints1:
         return lambda state, op: state
 
-    line_arr = jnp.array(lines, dtype=ACTION_DTYPE)
+    ep1 = jnp.array(endpoints1, dtype=ACTION_DTYPE)
+    mid = jnp.array(middles, dtype=ACTION_DTYPE)
+    ep2 = jnp.array(endpoints2, dtype=ACTION_DTYPE)
 
     def apply_fn(state, original_player):
-        occupied_mover = (state.board == original_player).any(axis=0)
-        occupied_enemy = ((state.board != EMPTY) & (state.board != original_player)).any(axis=0)
+        mover_mask = (state.board == original_player).any(axis=0)
+        enemy_mask = ((state.board != EMPTY) & (state.board != original_player)).any(axis=0)
 
-        # Check each potential custodial line
+        # Vectorized check: both endpoints friendly, middle is enemy
+        is_custodial = mover_mask[ep1] & mover_mask[ep2] & enemy_mask[mid]
+
+        # Scatter captures: for each triggered triple, mark the middle cell
         capture_mask = jnp.zeros(n, dtype=jnp.bool_)
-        for line in lines:
-            endpoints_mine = occupied_mover[line[0]] & occupied_mover[line[-1]]
-            middle_enemy = jnp.array([occupied_enemy[line[i]] for i in range(1, len(line) - 1)]).all()
-            is_custodial = endpoints_mine & middle_enemy
-            for i in range(1, len(line) - 1):
-                capture_mask = capture_mask | (is_custodial & (jnp.arange(n) == line[i]))
+        capture_mask = capture_mask.at[mid].set(capture_mask[mid] | is_custodial)
 
         board = jnp.where(capture_mask[jnp.newaxis, :], EMPTY, state.board)
         return state._replace(board=board)

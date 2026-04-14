@@ -326,12 +326,23 @@ def compile(lud_text_or_path: str):
         effects.append(compile_set_score(np))
     effects_fn = chain_effects(effects)
 
-    # Compile end conditions
+    # Compile end conditions — use END section text, not full game text
     end_fns = []
-    full_text = info.full_text
+    end_text = ""
+    rules_node = find_child(tree, "rules")
+    if rules_node:
+        rules_content = find_child(rules_node, "rules_content")
+        if rules_content:
+            for item in find_all(rules_content, "rules_item"):
+                end_node = find_child(item, "end")
+                if end_node:
+                    end_text = get_text(end_node)
+                    break
+    if not end_text:
+        end_text = info.full_text  # fallback
 
-    if "is Line" in full_text:
-        for m in re.finditer(r'is Line (\d+).*?result (\w+) (\w+)', full_text):
+    if "is Line" in end_text:
+        for m in re.finditer(r'is Line (\d+).*?result (\w+) (\w+)', end_text):
             n_line = int(m.group(1))
             outcome = m.group(3)
             line_idx = build_line_indices(topo, n_line)
@@ -340,14 +351,14 @@ def compile(lud_text_or_path: str):
             elif outcome == "Loss":
                 end_fns.append(compile_line_loss(line_idx, piece_idx, np))
 
-    if "no Moves" in full_text or "no_legal" in full_text:
+    if "no Moves" in end_text or "no_legal" in end_text:
         end_fns.append(compile_no_moves_loss(np))
 
-    if "no Pieces" in full_text:
+    if "no Pieces" in end_text or "count Pieces" in end_text:
         end_fns.append(compile_captured_all(np))
 
-    if "is Full" in full_text:
-        if "by_score" in full_text.lower() or "by Score" in full_text:
+    if "is Full" in end_text:
+        if "by_score" in end_text.lower() or "by Score" in end_text:
             end_fns.append(compile_full_board_by_score(np))
         else:
             end_fns.append(compile_full_board_draw(np))
