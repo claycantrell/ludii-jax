@@ -82,18 +82,23 @@ def compile(lud_text_or_path: str):
     elif info.is_dice:
         legal_fn, apply_fn = compile_dice_move(topo, piece_idx, np)
         action_size = topo.num_sites
-        start_fn = _build_start_fn(tree, info, topo)
-        # If no pieces placed, auto-place on first/last few cells
-        if "place" not in info.start_text and topo.num_sites >= 4:
-            half = topo.num_sites // 2
-            def dice_start(state):
-                board = state.board
-                # Place some pieces for each player
-                for i in range(min(2, half)):
-                    board = board.at[piece_idx, i].set(BOARD_DTYPE(0))
-                    board = board.at[piece_idx, topo.num_sites - 1 - i].set(BOARD_DTYPE(1))
-                return state._replace(board=board)
-            start_fn = dice_start
+        base_start = _build_start_fn(tree, info, topo)
+
+        # Dice games: always place pieces on the board
+        # Region-based (Bottom/Top) or fallback to first/last cells
+        n_sites = topo.num_sites
+        p1_cells = [i for i, r in enumerate(topo.regions.get("bottom", [False]*n_sites)) if r] or list(range(min(3, n_sites // 2)))
+        p2_cells = [i for i, r in enumerate(topo.regions.get("top", [False]*n_sites)) if r] or list(range(max(n_sites - 3, n_sites // 2), n_sites))
+
+        def dice_start(state, _base=base_start, _p1=p1_cells, _p2=p2_cells, _pi=piece_idx):
+            state = _base(state)
+            board = state.board
+            for c in _p1:
+                board = board.at[_pi, c].set(BOARD_DTYPE(0))
+            for c in _p2:
+                board = board.at[_pi, c].set(BOARD_DTYPE(1))
+            return state._replace(board=board)
+        start_fn = dice_start
 
     else:
         # Determine movement types and build combined legal/apply
