@@ -102,63 +102,50 @@ def compile(lud_text_or_path: str):
         start_fn = dice_start
 
     else:
-        # Determine movement types and build combined legal/apply
-        legal_fns = []
-        apply_fns = []
+        # ============================================================
+        # Structural mechanic detection from the play section's parse tree
+        # ============================================================
+        rules_node = find_child(tree, "rules")
+        play_text = ""
+        if rules_node:
+            rules_content = find_child(rules_node, "rules_content")
+            if rules_content:
+                for item in find_all(rules_content, "rules_item"):
+                    play_node = find_child(item, "play")
+                    if play_node:
+                        play_text = get_text(play_node)
+                        break
 
-        for pi, p in enumerate(info.pieces if info.pieces else [type('P', (), {'name': 'token'})()]):
-            if info.has_step or (not info.has_hop and not info.has_slide and not info.has_leap):
-                l, a = compile_step(topo, slide_lookup, pi, np)
-                legal_fns.append(l)
-                apply_fns.append(a)
-            if info.has_hop:
-                hop_over = "mover" if ("is Friend" in info.full_text and "between" in info.full_text) else "opponent"
-                l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over)
-                legal_fns.append(l)
-                apply_fns.append(a)
-
-        if info.has_slide:
-            l, a = compile_slide(topo, slide_lookup, piece_idx, np)
-            legal_fns.append(l)
-            apply_fns.append(a)
-
-        if info.has_leap:
-            offsets = [(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)]
-            l, a = compile_leap(topo, piece_idx, np, offsets)
-            legal_fns.append(l)
-            apply_fns.append(a)
-
-        # If we have movement, use FROM_TO action space
-        if legal_fns:
-            legal_fn, apply_fn = combine_move_fns(legal_fns, apply_fns, topo.num_sites)
-            action_size = topo.num_sites * topo.num_sites
+        # Classify the PRIMARY mechanic from the play section structure
+        if "move Add" in play_text or "move Claim" in play_text:
+            mechanic = "PLACE"
+        elif "satisfy" in play_text:
+            mechanic = "PLACE"  # puzzle = placement
+        elif "move Remove" in play_text and "forEach Piece" not in play_text:
+            mechanic = "REMOVE"
+        elif "move Select" in play_text and "forEach Piece" not in play_text and "move Step" not in play_text:
+            mechanic = "SELECT"
+        elif "forEach Site" in play_text and "forEach Piece" not in play_text:
+            mechanic = "PLACE"
+        elif "handSite" in play_text and "forEach Piece" not in play_text:
+            mechanic = "PLACE"
+        elif "forEach Piece" in play_text:
+            mechanic = "FOREACH_PIECE"
+        elif "move Step" in play_text or "move Hop" in play_text or "move Slide" in play_text:
+            mechanic = "MOVEMENT"
         else:
-            # Pure placement
-            legal_fn, apply_fn = compile_place(topo, piece_idx, np)
-            action_size = topo.num_sites
-
-        # Check if the PLAY section specifically uses placement vs movement
-        full_text = info.full_text
-        # Get just the play section text (not piece definitions)
-        play_section = full_text[full_text.find("play"):] if "play" in full_text else full_text
-        play_has_add = any(kw in play_section for kw in ["move Add", "move Claim", "satisfy", "handSite", "move Select", "move Remove", "forEach Site"])
-        play_has_movement = any(kw in play_section for kw in ["forEach Piece", "move Step", "move Hop", "move Slide", "move Leap"])
-        has_placement = play_has_add or "handSite" in full_text or "Hand" in full_text
-        has_movement = play_has_movement
+            mechanic = "PLACE"  # default: placement
 
         start_fn = _build_start_fn(tree, info, topo)
 
-        # Route to placement if:
-        # 1. Play section uses Add/Claim/satisfy/handSite (pure placement)
-        # 2. Play section has both placement and movement but no board pieces at start
-        # 3. Hand-based games (pieces start in hand, not on board)
-        is_hand_game = "Hand" in info.full_text and "handSite" in info.full_text
-        board_has_start_pieces = "place" in info.start_text and '"Hand"' not in info.start_text
-        # Check if play is primarily Select/Remove (pick-a-cell, not movement)
-        play_is_select = ("move Remove" in play_section and "move Step" not in play_section and "move Hop" not in play_section) or \
-                          ("move Select" in play_section and "forEach Piece" not in play_section and "move Step" not in play_section and "move Hop" not in play_section and "move Slide" not in play_section)
-        if play_is_select:
-            # Select/Remove games: action = pick a cell (occupied)
+        # ============================================================
+        # Compile based on structural mechanic
+        # ============================================================
+        if mechanic == "PLACE":
+            legal_fn, apply_fn = compile_place(topo, piece_idx, np)
+            action_size = topo.num_sites
+
+        elif mechanic == "REMOVE":
             def select_legal(state):
                 return (state.board != EMPTY).any(axis=0).astype(BOARD_DTYPE)
             def select_apply(state, action):
@@ -167,12 +154,50 @@ def compile(lud_text_or_path: str):
                 return state._replace(board=board, previous_actions=pa)
             legal_fn, apply_fn = select_legal, select_apply
             action_size = topo.num_sites
-        elif has_placement and not has_movement:
-            legal_fn, apply_fn = compile_place(topo, piece_idx, np)
+
+        elif mechanic == "SELECT":
+            def select_legal(state):
+                return (state.board == state.current_player).any(axis=0).astype(BOARD_DTYPE)
+            def select_apply(state, action):
+                board = state.board.at[:, action].set(EMPTY)
+                pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(action)).at[np].set(ACTION_DTYPE(action))
+                return state._replace(board=board, previous_actions=pa)
+            legal_fn, apply_fn = select_legal, select_apply
             action_size = topo.num_sites
-        elif has_placement and has_movement and (not board_has_start_pieces or is_hand_game):
-            legal_fn, apply_fn = compile_place(topo, piece_idx, np)
-            action_size = topo.num_sites
+
+        else:
+            # FOREACH_PIECE or MOVEMENT: compile step/hop/slide/leap
+            legal_fns = []
+            apply_fns = []
+
+            for pi, p in enumerate(info.pieces if info.pieces else [type('P', (), {'name': 'token'})()]):
+                if info.has_step or (not info.has_hop and not info.has_slide and not info.has_leap):
+                    l, a = compile_step(topo, slide_lookup, pi, np)
+                    legal_fns.append(l)
+                    apply_fns.append(a)
+                if info.has_hop:
+                    hop_over = "mover" if ("is Friend" in info.full_text and "between" in info.full_text) else "opponent"
+                    l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over)
+                    legal_fns.append(l)
+                    apply_fns.append(a)
+
+            if info.has_slide:
+                l, a = compile_slide(topo, slide_lookup, piece_idx, np)
+                legal_fns.append(l)
+                apply_fns.append(a)
+
+            if info.has_leap:
+                offsets = [(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)]
+                l, a = compile_leap(topo, piece_idx, np, offsets)
+                legal_fns.append(l)
+                apply_fns.append(a)
+
+            if legal_fns:
+                legal_fn, apply_fn = combine_move_fns(legal_fns, apply_fns, topo.num_sites)
+                action_size = topo.num_sites * topo.num_sites
+            else:
+                legal_fn, apply_fn = compile_place(topo, piece_idx, np)
+                action_size = topo.num_sites
 
     # Compile effects
     effects = []
