@@ -122,6 +122,7 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
     max_nb = topology.max_neighbors
     arange_n = jnp.arange(n, dtype=jnp.int32)
     hop_over_friendly = (hop_over == "mover")
+    hop_over_any = (hop_over == "any")
     do_promote = promote_from >= 0 and promote_to >= 0 and promo_rows is not None and piece_idx == promote_from
 
     dir_masks, per_player = _build_dir_masks(directions, max_nb)
@@ -134,7 +135,9 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
     def legal_fn(state):
         owned = (state.board[piece_idx] == state.current_player)
         dm = _get_dir_mask(state)
-        if hop_over_friendly:
+        if hop_over_any:
+            hop_mask = (state.board != EMPTY).any(axis=0)
+        elif hop_over_friendly:
             hop_mask = (state.board == state.current_player).any(axis=0)
         else:
             hop_mask = ((state.board != EMPTY) & (state.board != state.current_player)).any(axis=0)
@@ -146,7 +149,11 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
         valid = owned[jnp.newaxis, :] & on_board & has_hop_piece
         valid = valid & dm[:, jnp.newaxis]
 
-        if hop_over_friendly:
+        if hop_over_any:
+            # Land on empty only
+            empty = (state.board == EMPTY).all(axis=0)
+            valid = valid & empty[dests.clip(0, n - 1)]
+        elif hop_over_friendly:
             enemy = ((state.board != EMPTY) & (state.board != state.current_player)).any(axis=0)
             valid = valid & enemy[dests.clip(0, n - 1)]
         else:

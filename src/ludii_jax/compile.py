@@ -289,10 +289,17 @@ def compile(lud_text_or_path: str):
                     legal_fns.append(l)
                     apply_fns.append(a)
                 if info.has_hop:
-                    hop_over = "mover" if ("is Friend" in info.full_text and "between" in info.full_text) else "opponent"
+                    if "is Occupied" in info.full_text and "between" in info.full_text:
+                        hop_over = "any"
+                    elif "is Friend" in info.full_text and "between" in info.full_text:
+                        hop_over = "mover"
+                    else:
+                        hop_over = "opponent"
+                    hop_capture = (hop_over != "any")  # hop-over-any = non-capturing hop
                     hop_fn_indices.append(len(legal_fns))
                     l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over,
-                                       directions=pi_hop_dirs, chain_capture=has_chain,
+                                       capture=hop_capture, directions=pi_hop_dirs,
+                                       chain_capture=has_chain,
                                        promote_from=promote_from, promote_to=promote_to,
                                        promo_rows=promo_rows)
                     legal_fns.append(l)
