@@ -269,72 +269,105 @@ def _tri(size: int) -> BoardTopology:
 
 
 def _concentric(board_text: str) -> BoardTopology:
-    """Concentric ring boards: (concentric Square rings:3), (concentric {1 6 6 6})."""
+    """Concentric ring boards: (concentric Square rings:3), (concentric {1 6 6 6}).
+
+    For Square rings:N, uses grid-coordinate layout matching Ludii's vertex ordering.
+    Outer ring first, 8 vertices per ring: TL, T, TR, R, BR, B, BL, L clockwise.
+    """
     tokens = board_text.replace("(", " ").replace(")", " ").split()
     nums = [int(t) for t in tokens if t.isdigit()]
 
     rings_match = re.search(r'rings:(\d+)', board_text)
+    is_square = "square" in board_text.lower()
+
+    if rings_match and is_square:
+        rings = int(rings_match.group(1))
+        # Grid-coordinate layout matching Ludii's row-by-row vertex numbering
+        # For N rings on a 2N×2N grid, center at (N, N)
+        grid_size = 2 * rings
+        mid = rings  # center coordinate
+
+        # Generate all ring vertices with grid coords
+        all_verts = []  # (x, y)
+        for r in range(rings):
+            # Ring r: outer=0, inner=rings-1
+            off = rings - r  # distance from center
+            # 8 vertices: TL, T, TR, R, BR, B, BL, L
+            verts = [
+                (mid - off, mid + off), (mid, mid + off), (mid + off, mid + off),
+                (mid + off, mid), (mid + off, mid - off), (mid, mid - off),
+                (mid - off, mid - off), (mid - off, mid),
+            ]
+            all_verts.extend(verts)
+
+        # Sort by Ludii convention: top-to-bottom (decreasing y), left-to-right (increasing x)
+        indexed = [(x, y, i) for i, (x, y) in enumerate(all_verts)]
+        indexed.sort(key=lambda v: (-v[1], v[0]))
+        # Build mapping: old_idx → new_idx
+        old_to_new = {}
+        coords = []
+        for new_idx, (x, y, old_idx) in enumerate(indexed):
+            old_to_new[old_idx] = new_idx
+            coords.append((float(x), float(y)))
+
+        # Build edges using original ring structure, then remap
+        edges = []
+        for r in range(rings):
+            base = r * 8
+            # Ring edges: TL-T, T-TR, TR-R, R-BR, BR-B, B-BL, BL-L, L-TL
+            for i in range(8):
+                a, b = old_to_new[base + i], old_to_new[base + (i + 1) % 8]
+                edges.append((min(a, b), max(a, b)))
+            # Inter-ring: midpoints (T=1, R=3, B=5, L=7) connect to adjacent inner ring
+            if r < rings - 1:
+                inner_base = (r + 1) * 8
+                for mid in [1, 3, 5, 7]:
+                    a, b = old_to_new[base + mid], old_to_new[inner_base + mid]
+                    edges.append((min(a, b), max(a, b)))
+
+        # Deduplicate
+        edges = list(set(edges))
+        return _from_edges(coords, edges)
+
+    # Non-square or explicit ring sizes
     if rings_match:
         rings = int(rings_match.group(1))
-        sides = 4  # default square
+        sides = 4
         for t in tokens:
-            if t.lower() == "triangle":
-                sides = 3
-            elif t.lower() == "hexagon":
-                sides = 6
+            if t.lower() == "triangle": sides = 3
+            elif t.lower() == "hexagon": sides = 6
         ring_sizes = [2 * sides] * rings
     elif nums and len(nums) >= 2:
         ring_sizes = nums
     else:
-        ring_sizes = [1, 4, 8, 12]
+        ring_sizes = [8, 8, 8]
 
     coords = []
     edges = []
     vertex_idx = 0
     ring_start_indices = []
-
     for ring_idx, ring_size in enumerate(ring_sizes):
         ring_start = vertex_idx
         ring_start_indices.append(ring_start)
-
         if ring_idx == 0 and ring_size == 1:
             coords.append((0.0, 0.0))
             vertex_idx += 1
             continue
-
         radius = ring_idx + 1
         for i in range(ring_size):
             angle = 2 * math.pi * i / ring_size
             coords.append((radius * math.cos(angle), radius * math.sin(angle)))
-            # Connect to next in ring
             if i > 0:
                 edges.append((vertex_idx, vertex_idx - 1))
             vertex_idx += 1
-        # Close ring
         if ring_size > 1:
             edges.append((ring_start, vertex_idx - 1))
-        # Connect to inner ring
         if ring_idx > 0:
             inner_start = ring_start_indices[ring_idx - 1]
             inner_size = ring_sizes[ring_idx - 1]
             for i in range(ring_size):
                 inner_i = (i * inner_size // ring_size) % inner_size if inner_size > 0 else 0
                 edges.append((ring_start + i, inner_start + inner_i))
-
-    # Check joinCorners
-    if "joinCorners:True" in board_text or "joinCorners:true" in board_text:
-        # Additional diagonal connections between rings
-        for ring_idx in range(1, len(ring_sizes)):
-            if ring_idx + 1 < len(ring_sizes):
-                inner_s = ring_start_indices[ring_idx]
-                outer_s = ring_start_indices[ring_idx + 1]
-                inner_n = ring_sizes[ring_idx]
-                outer_n = ring_sizes[ring_idx + 1]
-                for i in range(inner_n):
-                    # Connect to adjacent outer vertices
-                    outer_i = (i * outer_n // inner_n) % outer_n
-                    if (inner_s + i, outer_s + outer_i) not in edges:
-                        edges.append((inner_s + i, outer_s + outer_i))
 
     return _from_edges(coords, edges)
 
