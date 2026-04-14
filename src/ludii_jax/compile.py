@@ -135,22 +135,20 @@ def compile(lud_text_or_path: str):
         full_text = info.full_text
         # Get just the play section text (not piece definitions)
         play_section = full_text[full_text.find("play"):] if "play" in full_text else full_text
-        play_has_add = "move Add" in play_section or "Add" in play_section.split("play")[0] if "play" in play_section else False
-        play_has_movement = "forEach Piece" in play_section or "move Step" in play_section or "move Hop" in play_section or "move Slide" in play_section
+        play_has_add = any(kw in play_section for kw in ["move Add", "move Claim", "satisfy", "handSite"])
+        play_has_movement = any(kw in play_section for kw in ["forEach Piece", "move Step", "move Hop", "move Slide", "move Leap"])
         has_placement = play_has_add or "handSite" in full_text or "Hand" in full_text
         has_movement = play_has_movement
 
         start_fn = _build_start_fn(tree, info, topo)
 
-        # If game has placement AND movement but no start pieces, use placement
-        # (pieces need to be placed before they can move)
-        if has_placement and has_movement:
-            # Check if start_fn actually places pieces
-            test_board = jnp.ones((len(info.pieces) or 1, topo.num_sites), dtype=BOARD_DTYPE) * EMPTY
-            if not "place" in info.start_text:
-                legal_fn, apply_fn = compile_place(topo, piece_idx, np)
-                action_size = topo.num_sites
-        elif has_placement and not has_movement:
+        # Route to placement if:
+        # 1. Play section uses Add/Claim/satisfy/handSite (pure placement)
+        # 2. Play section has both placement and movement but no start pieces
+        if has_placement and not has_movement:
+            legal_fn, apply_fn = compile_place(topo, piece_idx, np)
+            action_size = topo.num_sites
+        elif has_placement and has_movement and "place" not in info.start_text:
             legal_fn, apply_fn = compile_place(topo, piece_idx, np)
             action_size = topo.num_sites
 
