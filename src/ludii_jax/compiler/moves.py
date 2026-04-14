@@ -221,8 +221,12 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
     return legal_fn, apply_fn
 
 
-def compile_slide(topology, slide_lookup, piece_idx, num_players, max_distance=None):
-    """Compile slide movement: move any number of cells in a direction until blocked."""
+def compile_slide(topology, slide_lookup, piece_idx, num_players, max_distance=None,
+                   blocked_cells=None):
+    """Compile slide movement: move any number of cells in a direction until blocked.
+
+    blocked_cells: optional jnp bool array (n,) — cells that block sliding even when empty.
+    """
     n = topology.num_sites
     max_nb = topology.max_neighbors
     if max_distance is None:
@@ -230,9 +234,10 @@ def compile_slide(topology, slide_lookup, piece_idx, num_players, max_distance=N
     arange_n = jnp.arange(n, dtype=ACTION_DTYPE)
     general_idx = jnp.indices((n, max_nb, max_distance), dtype=ACTION_DTYPE)[2]
     occupied_pad = jnp.ones((n, max_nb, 1), dtype=ACTION_DTYPE)
+    _blocked = blocked_cells if blocked_cells is not None else jnp.zeros(n, dtype=jnp.bool_)
 
     def legal_fn(state):
-        occupied = (state.board != EMPTY).any(axis=0).astype(BOARD_DTYPE)
+        occupied = ((state.board != EMPTY).any(axis=0) | _blocked).astype(BOARD_DTYPE)
         slide_indices = slide_lookup[:, :, :max_distance].transpose(1, 0, 2)
         occupied_at = occupied.at[slide_indices].get(mode="fill", fill_value=1)
         occupied_at = occupied_at.at[:, :, 0].set(0)

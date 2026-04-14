@@ -62,6 +62,51 @@ def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, n
     return apply_fn
 
 
+def compile_surround_capture(topology, corner_only=True, num_players=2):
+    """Surround capture: remove enemy in corner when all neighbors are friendly.
+
+    For Hasami Shogi: enemy in corner is captured when all its orthogonal
+    neighbors are friendly pieces or board edges.
+    """
+    import numpy as np
+    n = topology.num_sites
+
+    # Find corner cells
+    if corner_only:
+        corner_cells = []
+        for i in range(n):
+            nb_count = sum(1 for d in range(topology.max_neighbors) if int(topology.adjacency[d, i]) < n)
+            if nb_count <= 2:  # corner = 2 or fewer neighbors
+                corner_cells.append(i)
+        target_cells = jnp.array(corner_cells, dtype=ACTION_DTYPE) if corner_cells else jnp.array([], dtype=ACTION_DTYPE)
+    else:
+        target_cells = jnp.arange(n, dtype=ACTION_DTYPE)
+
+    # Precompute neighbor lists per cell (padded)
+    max_nb = topology.max_neighbors
+    adj = jnp.array(topology.adjacency)
+
+    def apply_fn(state, original_player):
+        mover_mask = (state.board == original_player).any(axis=0)
+        enemy_mask = ((state.board != EMPTY) & (state.board != original_player)).any(axis=0)
+
+        capture_mask = jnp.zeros(n, dtype=jnp.bool_)
+        for cell in corner_cells if corner_only else range(n):
+            is_enemy = enemy_mask[cell]
+            # Check all neighbors: each must be friendly or off-board
+            all_blocked = jnp.bool_(True)
+            for d in range(max_nb):
+                nb = adj[d, cell]
+                nb_ok = (nb >= n) | mover_mask[nb.clip(0, n - 1)]  # off-board or friendly
+                all_blocked = all_blocked & nb_ok
+            capture_mask = capture_mask.at[cell].set(is_enemy & all_blocked)
+
+        board = jnp.where(capture_mask[jnp.newaxis, :], EMPTY, state.board)
+        return state._replace(board=board)
+
+    return apply_fn
+
+
 def compile_flip(topology, piece_idx, num_players=2):
     """Flip effect: change piece ownership (Reversi-style)."""
     n = topology.num_sites

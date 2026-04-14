@@ -24,7 +24,8 @@ from .compiler.moves import (
     combine_move_fns,
 )
 from .compiler.effects import (
-    compile_custodial_capture, compile_flip, compile_set_score,
+    compile_custodial_capture, compile_surround_capture,
+    compile_flip, compile_set_score,
     compile_extra_turn, chain_effects,
 )
 from .compiler.conditions import (
@@ -296,11 +297,19 @@ def compile(lud_text_or_path: str):
                                        promo_rows=promo_rows)
                     legal_fns.append(l)
                     apply_fns.append(a)
-
-            if info.has_slide:
-                l, a = compile_slide(topo, slide_lookup, piece_idx, np)
-                legal_fns.append(l)
-                apply_fns.append(a)
+                if info.has_slide:
+                    # Per-piece slide: detect blocked cells (throne in Tablut blocks non-king)
+                    blocked = None
+                    if "centrePoint" in info.full_text and "between" in info.full_text:
+                        # Check if this piece is the king (owner-restricted or named king/jarl)
+                        pname = p.name if hasattr(p, 'name') else ''
+                        is_king = pname in ('jarl', 'king', 'konig') or (hasattr(p, 'owner') and p.owner == 'P1' and 'King' in info.full_text)
+                        if not is_king:
+                            blocked = jnp.zeros(topo.num_sites, dtype=jnp.bool_)
+                            blocked = blocked.at[topo.num_sites // 2].set(True)
+                    l, a = compile_slide(topo, slide_lookup, pi, np, blocked_cells=blocked)
+                    legal_fns.append(l)
+                    apply_fns.append(a)
 
             if info.has_leap:
                 offsets = [(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)]
@@ -318,10 +327,12 @@ def compile(lud_text_or_path: str):
 
     # Compile effects
     effects = []
-    # Custodial capture: compile when explicitly present in game text
     if "custodial" in info.full_text.lower():
         adj_lookup = None
         effects.append(compile_custodial_capture(topo, adj_lookup, piece_idx, num_players=np))
+    if "surround" in info.full_text.lower():
+        corner_only = "Corners" in info.full_text or "corners" in info.full_text
+        effects.append(compile_surround_capture(topo, corner_only=corner_only, num_players=np))
     if info.has_score:
         effects.append(compile_set_score(np))
     effects_fn = chain_effects(effects)
