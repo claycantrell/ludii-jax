@@ -57,8 +57,16 @@ def build_topology(board_text: str) -> BoardTopology:
     if shape in ("hex", "hexagon"):
         args = [int(t) for t in tokens[1:] if t.isdigit()]
         is_diamond = "diamond" in board_text.lower()
+        is_triangle = "triangle" in board_text.lower()
+        is_rectangle = "rectangle" in board_text.lower()
         if is_diamond and args:
             return _hex_diamond(args[0])
+        if is_triangle and args:
+            # Triangular hex: N rows with widths 1, 2, ..., N
+            n = args[0]
+            return _hex_variable(list(range(1, n + 1)))
+        if is_rectangle and len(args) >= 2:
+            return _hex_variable([args[0]] * args[1])
         if len(args) >= 3:
             return _hex_variable([int(a) for a in args])
         if args:
