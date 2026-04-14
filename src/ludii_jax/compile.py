@@ -131,10 +131,14 @@ def compile(lud_text_or_path: str):
             legal_fn, apply_fn = compile_place(topo, piece_idx, np)
             action_size = topo.num_sites
 
-        # Check if game has placement
+        # Check if the PLAY section specifically uses placement vs movement
         full_text = info.full_text
-        has_placement = "move Add" in full_text or "handSite" in full_text or "Hand" in full_text
-        has_movement = info.has_step or info.has_hop or info.has_slide
+        # Get just the play section text (not piece definitions)
+        play_section = full_text[full_text.find("play"):] if "play" in full_text else full_text
+        play_has_add = "move Add" in play_section or "Add" in play_section.split("play")[0] if "play" in play_section else False
+        play_has_movement = "forEach Piece" in play_section or "move Step" in play_section or "move Hop" in play_section or "move Slide" in play_section
+        has_placement = play_has_add or "handSite" in full_text or "Hand" in full_text
+        has_movement = play_has_movement
 
         start_fn = _build_start_fn(tree, info, topo)
 
@@ -267,6 +271,31 @@ def _build_start_fn(tree, info, topo):
                 indices = list(range(half)) if region == "bottom" else list(range(n - half, n))
             if pname in piece_names and indices:
                 placements.append((piece_names.index(pname), player, indices))
+
+    # Direct cell index: place "Name" N or place "Name" N count:M
+    for m in re.finditer(r'place\s+(?:Stack\s+)?"([^"]+)"\s+(\d+)', full_text):
+        pname_raw = m.group(1)
+        cell = int(m.group(2))
+        if cell < n:
+            pname = resolve_name(pname_raw)
+            player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+            if pname in piece_names:
+                placements.append((piece_names.index(pname), player, [cell]))
+
+    # Coord placement: place "Name" "A1" or place "Name" coord:"A1"
+    for m in re.finditer(r'place\s+"([^"]+)"\s+(?:coord:)?"([A-Za-z]\d+)"', full_text):
+        pname_raw = m.group(1)
+        coord = m.group(2)
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        # Convert chess notation to index
+        col = ord(coord[0].upper()) - ord('A')
+        row = int(coord[1:]) - 1
+        # Find nearest site in topology
+        if topo.site_coords:
+            best_idx = min(range(n), key=lambda i: abs(topo.site_coords[i][0] - col) + abs(topo.site_coords[i][1] - row))
+            if pname in piece_names:
+                placements.append((piece_names.index(pname), player, [best_idx]))
 
     # Site-list pattern: place "Name" sites 2 3 4 ...
     for m in re.finditer(r'place\s+"([^"]+)"\s+(?:\(?sites\s+)?\{?(\d[\d\s]+)\}?', full_text):
