@@ -77,8 +77,20 @@ TEST_GAMES = {
     # Additional territory
     "Othello": "board/space/territory/Othello.lud",
 
-    # Additional replacement/war
-    "Amazons": "board/space/territory/Amazons.lud",
+    # More connection
+    "Unlur": "board/space/connection/Unlur.lud",
+    "TriHex": "board/space/connection/TriHex.lud",
+    "Manalath": "board/space/connection/Manalath.lud",
+
+    # More line games
+    "Quarto": "board/space/line/Quarto.lud",
+
+    # More hunt/replacement
+    "Fox and Geese": "board/hunt/Fox and Geese.lud",
+    "Alquerque": "board/war/leaping/orthogonal/Alquerque.lud",
+
+    # Race
+    "Surakarta": "board/war/other/Surakarta.lud",
 }
 
 
