@@ -41,11 +41,15 @@ def _build_dir_masks(directions, max_nb):
 
 
 def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1,
-                 directions=None, reset_chain=False):
+                 directions=None, reset_chain=False,
+                 promote_from=-1, promote_to=-1, promo_rows=None,
+                 to_empty=False):
     """Compile step movement: move exactly `distance` cells.
 
     directions: list, tuple of (p1_dirs, p2_dirs), or None.
     reset_chain: if True, reset extra_turn_fn_idx to -1 (ends any chain capture).
+    promote_from/to: piece indices for promotion. promo_rows: (2, n) bool mask.
+    to_empty: if True, only step to empty cells (no capture-by-step).
     """
     n = topology.num_sites
     max_nb = topology.max_neighbors
@@ -53,17 +57,21 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1,
     arange_n = jnp.arange(n, dtype=jnp.int32)
 
     dir_masks, per_player = _build_dir_masks(directions, max_nb)
+    do_promote = promote_from >= 0 and promote_to >= 0 and promo_rows is not None and piece_idx == promote_from
 
     def legal_fn(state):
         owned = (state.board[piece_idx] == state.current_player)
-        friendly = (state.board == state.current_player).any(axis=0)
         dests = slide_lookup[:, :, distance]  # (max_nb, n)
         on_board = dests < n
-        dest_not_friendly = ~friendly.at[dests.clip(0, n - 1)].get()
-        valid = owned[jnp.newaxis, :] & dest_not_friendly & on_board
+        if to_empty:
+            dest_ok = (state.board == EMPTY).all(axis=0)[dests.clip(0, n - 1)]
+        else:
+            friendly = (state.board == state.current_player).any(axis=0)
+            dest_ok = ~friendly[dests.clip(0, n - 1)]
+        valid = owned[jnp.newaxis, :] & dest_ok & on_board
 
         if per_player:
-            dm = dir_masks[state.current_player]  # (max_nb,)
+            dm = dir_masks[state.current_player]
         else:
             dm = dir_masks
         valid = valid & dm[:, jnp.newaxis]
@@ -79,9 +87,18 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1,
 
     def apply_fn(state, action):
         src, dst = action // n, action % n
-        board = state.board.at[:, dst].set(EMPTY)
+        if not to_empty:
+            board = state.board.at[:, dst].set(EMPTY)  # capture at destination
+        else:
+            board = state.board
         board = board.at[piece_idx, src].set(EMPTY)
         board = board.at[piece_idx, dst].set(state.current_player)
+        # Promotion: if piece is on promotion row, swap to promoted piece
+        if do_promote:
+            should_promote = promo_rows[state.current_player, dst]
+            board = jnp.where(should_promote,
+                              board.at[promote_from, dst].set(EMPTY).at[promote_to, dst].set(state.current_player),
+                              board)
         pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
         if reset_chain:
             return state._replace(board=board, previous_actions=pa,
@@ -93,16 +110,19 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1,
 
 def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
                 hop_over="opponent", capture=True, directions=None,
-                chain_capture=False):
+                chain_capture=False,
+                promote_from=-1, promote_to=-1, promo_rows=None):
     """Compile hop movement: jump over a piece to land beyond it.
 
     directions: list, tuple of (p1_dirs, p2_dirs), or None.
     chain_capture: if True, check for chain captures after each hop.
+    promote_from/to: piece indices for promotion. promo_rows: (2, n) bool mask.
     """
     n = topology.num_sites
     max_nb = topology.max_neighbors
     arange_n = jnp.arange(n, dtype=jnp.int32)
     hop_over_friendly = (hop_over == "mover")
+    do_promote = promote_from >= 0 and promote_to >= 0 and promo_rows is not None and piece_idx == promote_from
 
     dir_masks, per_player = _build_dir_masks(directions, max_nb)
 
@@ -162,6 +182,14 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
             else:
                 board = board.at[piece_idx, dst].set(state.current_player)
                 board = board.at[:, between_cell].set(EMPTY)
+
+            # Promotion: if piece landed on promotion row, swap layers
+            if do_promote:
+                should_promote = promo_rows[state.current_player, dst]
+                board = jnp.where(should_promote,
+                                  board.at[promote_from, dst].set(EMPTY).at[promote_to, dst].set(state.current_player),
+                                  board)
+
             pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
 
             if chain_capture:

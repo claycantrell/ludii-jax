@@ -233,16 +233,67 @@ def compile(lud_text_or_path: str):
             has_priority = "priority" in play_text and info.has_hop
             hop_fn_indices = []  # track which indices in legal_fns are hop functions
 
+            # Per-piece direction determination for promotion games
+            # Regular pieces: forward-only; promoted pieces: all directions
+            promote_from = -1  # piece idx that can promote
+            promote_to = -1    # piece idx it promotes to
+            if info.has_promote and len(info.pieces) >= 2:
+                for pi, p in enumerate(info.pieces):
+                    if "double" in p.name or "king" in p.name:
+                        promote_to = pi
+                    elif promote_from < 0:
+                        promote_from = pi
+                if promote_from < 0:
+                    promote_from = 0
+                if promote_to < 0:
+                    promote_to = len(info.pieces) - 1
+
+            # Build promotion row mask: P1 promotes at Top, P2 at Bottom
+            promo_rows = None
+            if promote_from >= 0 and promote_to >= 0:
+                n_sites = topo.num_sites
+                p1_promo = jnp.zeros(n_sites, dtype=jnp.bool_)
+                p2_promo = jnp.zeros(n_sites, dtype=jnp.bool_)
+                if "top" in topo.regions:
+                    for i in range(n_sites):
+                        if topo.regions["top"][i]:
+                            p1_promo = p1_promo.at[i].set(True)
+                if "bottom" in topo.regions:
+                    for i in range(n_sites):
+                        if topo.regions["bottom"][i]:
+                            p2_promo = p2_promo.at[i].set(True)
+                promo_rows = jnp.stack([p1_promo, p2_promo])  # (2, n)
+
             for pi, p in enumerate(info.pieces if info.pieces else [type('P', (), {'name': 'token'})()]):
+                # Determine piece-specific directions
+                if promote_from >= 0 and pi == promote_to:
+                    # Promoted piece: all diagonal (or all directions)
+                    pi_step_dirs = step_dirs if not isinstance(step_dirs, tuple) else None
+                    pi_hop_dirs = hop_dirs if not isinstance(hop_dirs, tuple) else None
+                    # If base dirs were diagonal, keep all diagonal for promoted piece
+                    if topo.max_neighbors == 8:
+                        pi_step_dirs = [1, 3, 5, 7]  # all diagonal
+                        pi_hop_dirs = [1, 3, 5, 7]
+                else:
+                    pi_step_dirs = step_dirs
+                    pi_hop_dirs = hop_dirs
+
+                # Step to empty only when game has separate hop captures
+                step_to_empty = has_priority and info.has_hop
                 if info.has_step or (not info.has_hop and not info.has_slide and not info.has_leap):
-                    l, a = compile_step(topo, slide_lookup, pi, np, directions=step_dirs,
-                                        reset_chain=has_chain)
+                    l, a = compile_step(topo, slide_lookup, pi, np, directions=pi_step_dirs,
+                                        reset_chain=has_chain,
+                                        promote_from=promote_from, promote_to=promote_to,
+                                        promo_rows=promo_rows, to_empty=step_to_empty)
                     legal_fns.append(l)
                     apply_fns.append(a)
                 if info.has_hop:
                     hop_over = "mover" if ("is Friend" in info.full_text and "between" in info.full_text) else "opponent"
                     hop_fn_indices.append(len(legal_fns))
-                    l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over, directions=hop_dirs, chain_capture=has_chain)
+                    l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over,
+                                       directions=pi_hop_dirs, chain_capture=has_chain,
+                                       promote_from=promote_from, promote_to=promote_to,
+                                       promo_rows=promo_rows)
                     legal_fns.append(l)
                     apply_fns.append(a)
 
@@ -267,8 +318,9 @@ def compile(lud_text_or_path: str):
 
     # Compile effects
     effects = []
-    if info.has_capture:
-        adj_lookup = None  # could build from topology
+    # Custodial capture only for non-hop games (hop games handle capture inline)
+    if info.has_capture and not info.has_hop and "custodial" in info.full_text.lower():
+        adj_lookup = None
         effects.append(compile_custodial_capture(topo, adj_lookup, piece_idx, num_players=np))
     if info.has_score:
         effects.append(compile_set_score(np))
