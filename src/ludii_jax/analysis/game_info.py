@@ -101,20 +101,40 @@ def extract_game_info(tree) -> GameInfo:
         rules_text = get_text(rules)
         info.start_text = rules_text[:rules_text.find("play")] if "play" in rules_text else ""
 
-        # Detect mechanics from full text
-        mt = info.full_text
-        for name, content in [(p.name, "") for p in info.pieces]:
-            mt += " " + content
-        info.has_step = "move Step" in mt or ("Step" in mt and "move" in mt)
-        info.has_hop = "move Hop" in mt or ("Hop" in mt and "move" in mt)
-        info.has_slide = "move Slide" in mt or ("Slide" in mt and "move" in mt)
-        info.has_leap = "Leap" in mt
-        info.has_capture = "remove" in mt.lower() and ("between" in mt or "custodial" in mt)
-        info.has_flip = "flip" in mt.lower()
-        info.has_promote = "promote" in mt.lower()
-        info.has_extra_turn = "moveAgain" in mt
-        info.has_score = "addScore" in mt or "set Score" in mt or "Score" in mt
-        info.has_connected = "is Connected" in mt
+        # Detect mechanics from PLAY section + piece definitions (for forEach Piece)
+        # NOT from the full text — avoids false positives from unrelated sections
+        play_node = None
+        rules_content = find_child(rules, "rules_content")
+        if rules_content:
+            for item in find_all(rules_content, "rules_item"):
+                p = find_child(item, "play")
+                if p:
+                    play_node = p
+                    break
+        play_mt = get_text(play_node) if play_node else ""
+        # For forEach Piece games, movement is defined in piece equipment — include it
+        if "forEach Piece" in play_mt:
+            equip = find_child(tree, "equipment")
+            if equip:
+                for item in find_all(equip, "equip_item"):
+                    etype = find_child(item, "equip_type")
+                    if etype:
+                        for c in etype.children:
+                            if isinstance(c, Token) and str(c) == "piece":
+                                content = find_child(item, "equip_content")
+                                if content:
+                                    play_mt += " " + get_text(content)
+        info.has_step = "move Step" in play_mt or ("Step" in play_mt and "move" in play_mt)
+        info.has_hop = "move Hop" in play_mt or ("Hop" in play_mt and "move" in play_mt)
+        info.has_slide = "move Slide" in play_mt or ("Slide" in play_mt and "move" in play_mt)
+        info.has_leap = "Leap" in play_mt
+        # Effects and conditions: detect from rules text (play + end + piece defs)
+        info.has_capture = "remove" in play_mt.lower() and ("between" in play_mt or "custodial" in play_mt)
+        info.has_flip = "flip" in rules_text.lower()
+        info.has_promote = "promote" in rules_text.lower()
+        info.has_extra_turn = "moveAgain" in play_mt
+        info.has_score = "addScore" in rules_text or "set Score" in rules_text or "by_score" in rules_text.lower()
+        info.has_connected = "is Connected" in rules_text
         info.has_phases = "phases" in rules_text.lower() or "phase" in rules_text.lower()
         info.has_hand = "hand" in info.full_text.lower() or "Hand" in info.full_text
 
