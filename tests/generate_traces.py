@@ -63,6 +63,22 @@ TEST_GAMES = {
     # Custodial
     "Hasami Shogi": "board/war/replacement/checkmate/shogi/Hasami Shogi.lud",
     "Dai Hasami Shogi": "board/space/line/Dai Hasami Shogi.lud",
+
+    # Additional connection games
+    "Atoll": "board/space/connection/Atoll.lud",
+    "Cross": "board/space/connection/Cross.lud",
+    "Crossway": "board/space/connection/Crossway.lud",
+    "Gonnect": "board/space/connection/Gonnect.lud",
+
+    # Additional line games
+    "Quax": "board/space/line/Quax.lud",
+    "Kensington": "board/space/line/Kensington.lud",
+
+    # Additional territory
+    "Othello": "board/space/territory/Othello.lud",
+
+    # Additional replacement/war
+    "Amazons": "board/space/territory/Amazons.lud",
 }
 
 
