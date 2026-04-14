@@ -15,25 +15,44 @@ import numpy as np
 from ..runtime.state import BOARD_DTYPE, ACTION_DTYPE, EMPTY
 
 
-def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1, directions=None):
+def _build_dir_masks(directions, max_nb):
+    """Build direction mask(s) from directions spec.
+
+    directions: None (all), list of ints (same for both players),
+    or tuple of (p1_dirs, p2_dirs) for per-player directions.
+    Returns (dir_mask, per_player) where per_player is True if
+    dir_mask is a (2, max_nb) array indexed by player.
+    """
+    if directions is None:
+        return jnp.ones(max_nb, dtype=jnp.bool_), False
+    if isinstance(directions, tuple) and len(directions) == 2:
+        p1_dirs, p2_dirs = directions
+        masks = jnp.zeros((2, max_nb), dtype=jnp.bool_)
+        for d in p1_dirs:
+            if d < max_nb: masks = masks.at[0, d].set(True)
+        for d in p2_dirs:
+            if d < max_nb: masks = masks.at[1, d].set(True)
+        return masks, True
+    else:
+        mask = jnp.zeros(max_nb, dtype=jnp.bool_)
+        for d in directions:
+            if d < max_nb: mask = mask.at[d].set(True)
+        return mask, False
+
+
+def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1,
+                 directions=None, reset_chain=False):
     """Compile step movement: move exactly `distance` cells.
 
-    directions: list of neighbor indices to allow (None = all).
-    E.g. for diagonal-only on 8-dir board: [0, 2, 5, 7]
+    directions: list, tuple of (p1_dirs, p2_dirs), or None.
+    reset_chain: if True, reset extra_turn_fn_idx to -1 (ends any chain capture).
     """
     n = topology.num_sites
     max_nb = topology.max_neighbors
     adj = jnp.array(topology.adjacency)
     arange_n = jnp.arange(n, dtype=jnp.int32)
 
-    # Direction mask: which neighbor indices are allowed
-    if directions is not None:
-        dir_mask = jnp.zeros(max_nb, dtype=jnp.bool_)
-        for d in directions:
-            if d < max_nb:
-                dir_mask = dir_mask.at[d].set(True)
-    else:
-        dir_mask = jnp.ones(max_nb, dtype=jnp.bool_)
+    dir_masks, per_player = _build_dir_masks(directions, max_nb)
 
     def legal_fn(state):
         owned = (state.board[piece_idx] == state.current_player)
@@ -42,9 +61,17 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1, dir
         on_board = dests < n
         dest_not_friendly = ~friendly.at[dests.clip(0, n - 1)].get()
         valid = owned[jnp.newaxis, :] & dest_not_friendly & on_board
-        # Apply direction restriction
-        valid = valid & dir_mask[:, jnp.newaxis]  # (max_nb, n)
-        # Scatter to flat mask
+
+        if per_player:
+            dm = dir_masks[state.current_player]  # (max_nb,)
+        else:
+            dm = dir_masks
+        valid = valid & dm[:, jnp.newaxis]
+
+        if reset_chain:
+            is_forced = (state.extra_turn_fn_idx >= 0)
+            valid = jnp.where(is_forced, jnp.zeros_like(valid), valid)
+
         flat_idx = arange_n[jnp.newaxis, :] * n + dests.clip(0, n - 1)
         mask = jnp.zeros(n * n, dtype=BOARD_DTYPE)
         mask = mask.at[flat_idx.flatten()].set(valid.flatten().astype(BOARD_DTYPE))
@@ -52,32 +79,41 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1, dir
 
     def apply_fn(state, action):
         src, dst = action // n, action % n
-        board = state.board.at[:, dst].set(EMPTY)  # clear destination (capture)
+        board = state.board.at[:, dst].set(EMPTY)
         board = board.at[piece_idx, src].set(EMPTY)
         board = board.at[piece_idx, dst].set(state.current_player)
         pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+        if reset_chain:
+            return state._replace(board=board, previous_actions=pa,
+                                  extra_turn_fn_idx=ACTION_DTYPE(-1))
         return state._replace(board=board, previous_actions=pa)
 
     return legal_fn, apply_fn
 
 
 def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
-                hop_over="opponent", capture=True, directions=None):
-    """Compile hop movement: jump over a piece to land beyond it."""
+                hop_over="opponent", capture=True, directions=None,
+                chain_capture=False):
+    """Compile hop movement: jump over a piece to land beyond it.
+
+    directions: list, tuple of (p1_dirs, p2_dirs), or None.
+    chain_capture: if True, check for chain captures after each hop.
+    """
     n = topology.num_sites
     max_nb = topology.max_neighbors
     arange_n = jnp.arange(n, dtype=jnp.int32)
     hop_over_friendly = (hop_over == "mover")
 
-    if directions is not None:
-        dir_mask = jnp.zeros(max_nb, dtype=jnp.bool_)
-        for d in directions:
-            if d < max_nb: dir_mask = dir_mask.at[d].set(True)
-    else:
-        dir_mask = jnp.ones(max_nb, dtype=jnp.bool_)
+    dir_masks, per_player = _build_dir_masks(directions, max_nb)
+
+    def _get_dir_mask(state):
+        if per_player:
+            return dir_masks[state.current_player]
+        return dir_masks
 
     def legal_fn(state):
         owned = (state.board[piece_idx] == state.current_player)
+        dm = _get_dir_mask(state)
         if hop_over_friendly:
             hop_mask = (state.board == state.current_player).any(axis=0)
         else:
@@ -86,20 +122,33 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
         between = slide_lookup[:, :, 1]  # (max_nb, n)
         dests = slide_lookup[:, :, 2]    # (max_nb, n)
         on_board = dests < n
-        has_hop_piece = hop_mask.at[between.clip(0, n - 1)].get()
-        valid = owned[jnp.newaxis, :] & on_board & has_hop_piece.astype(jnp.bool_)
-        valid = valid & dir_mask[:, jnp.newaxis]  # direction restriction
+        has_hop_piece = hop_mask[between.clip(0, n - 1)]
+        valid = owned[jnp.newaxis, :] & on_board & has_hop_piece
+        valid = valid & dm[:, jnp.newaxis]
 
         if hop_over_friendly:
             enemy = ((state.board != EMPTY) & (state.board != state.current_player)).any(axis=0)
-            valid = valid & enemy.at[dests.clip(0, n - 1)].get()
+            valid = valid & enemy[dests.clip(0, n - 1)]
         else:
             occupied = (state.board != EMPTY).any(axis=0)
-            valid = valid & ~occupied.at[dests.clip(0, n - 1)].get()
+            valid = valid & ~occupied[dests.clip(0, n - 1)]
 
         flat_idx = arange_n[jnp.newaxis, :] * n + dests.clip(0, n - 1)
         mask = jnp.zeros(n * n, dtype=BOARD_DTYPE)
         mask = mask.at[flat_idx.flatten()].set(valid.flatten().astype(BOARD_DTYPE))
+
+        if chain_capture:
+            forced_from = state.extra_turn_fn_idx
+            is_forced = (forced_from >= 0)
+            from_mask = (arange_n == forced_from)
+            forced_valid = from_mask[jnp.newaxis, :] & on_board & has_hop_piece & dm[:, jnp.newaxis]
+            if not hop_over_friendly:
+                forced_valid = forced_valid & ~occupied[dests.clip(0, n - 1)]
+            forced_flat = jnp.zeros(n * n, dtype=BOARD_DTYPE)
+            forced_flat = forced_flat.at[flat_idx.flatten()].set(
+                forced_valid.flatten().astype(BOARD_DTYPE))
+            mask = jnp.where(is_forced, forced_flat, mask)
+
         return mask
 
     if capture:
@@ -114,6 +163,24 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
                 board = board.at[piece_idx, dst].set(state.current_player)
                 board = board.at[:, between_cell].set(EMPTY)
             pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+
+            if chain_capture:
+                dm = _get_dir_mask(state)
+                between_from_dst = slide_lookup[:, dst, 1]
+                landing_from_dst = slide_lookup[:, dst, 2]
+                on_board_c = (landing_from_dst < n) & (between_from_dst < n)
+                enemy_mask = ((board != EMPTY) & (board != state.current_player)).any(axis=0)
+                empty_mask = (board == EMPTY).all(axis=0)
+                can_chain = on_board_c & dm & \
+                    enemy_mask[between_from_dst.clip(0, n - 1)] & \
+                    empty_mask[landing_from_dst.clip(0, n - 1)]
+                has_chain = can_chain.any()
+                phase_adj = jax.lax.select(has_chain, BOARD_DTYPE(-1), BOARD_DTYPE(0))
+                forced = jax.lax.select(has_chain, ACTION_DTYPE(dst), ACTION_DTYPE(-1))
+                return state._replace(
+                    board=board, previous_actions=pa,
+                    phase_step_count=state.phase_step_count + phase_adj,
+                    extra_turn_fn_idx=forced)
             return state._replace(board=board, previous_actions=pa)
     else:
         def apply_fn(state, action):
@@ -238,39 +305,101 @@ def compile_place(topology, piece_idx, num_players):
     return legal_fn, apply_fn
 
 
-def compile_sow(topology, num_players, initial_seeds=4, has_stores=True):
-    """Compile mancala sowing: pick a pit, distribute seeds along track."""
+def compile_sow(topology, num_players, initial_seeds=4, has_stores=True,
+                stores_in_track=True):
+    """Compile mancala sowing: pick a pit, distribute seeds along track.
+
+    Ludii mancalaBoard 2 N layout (14 cells for N=6):
+      Cell 0: left store, Cells 1-N: P1 pits (bottom),
+      Cells N+1..2N: P2 pits (top), Cell 2N+1: right store.
+
+    When stores_in_track=True (Kalah): each player skips opponent's store.
+    Per-player tracks: P1 skips cell 0, P2 skips cell n-1.
+    Kalah capture: if last seed lands in empty own pit, capture opposite.
+    """
     n = topology.num_sites
-    # For mancala with stores: stores are non-sowable cells
-    # Standard layout: P1 pits, P1 store, P2 pits, P2 store
     if has_stores and n >= 4:
         pits_per_player = (n - 2) // 2
-        p1_store = pits_per_player
-        p2_store = n - 1
-        is_store = jnp.zeros(n, dtype=jnp.bool_).at[p1_store].set(True).at[p2_store].set(True)
+        left_store = 0
+        right_store = n - 1
+        is_store = jnp.zeros(n, dtype=jnp.bool_).at[left_store].set(True).at[right_store].set(True)
     else:
         pits_per_player = n // 2
+        left_store = -1
+        right_store = -1
         is_store = jnp.zeros(n, dtype=jnp.bool_)
 
-    half = n // 2
+    ppp = pits_per_player if has_stores and n >= 4 else n // 2
 
-    # Build counter-clockwise track
-    if n > 2:
-        w = n // 2 if n % 2 == 0 else n
-        track = list(range(w)) + list(range(n - 1, w - 1, -1)) if n >= 4 else list(range(n))
+    # Build tracks
+    if has_stores and n >= 4 and stores_in_track:
+        # Full track with both stores
+        full_track = list(range(1, ppp + 1)) + [n - 1] + list(range(2 * ppp, ppp, -1)) + [0]
+        # Per-player tracks: skip opponent's store
+        # P1 (player 0): skip cell 0 (left store = P2's)
+        p1_track = [c for c in full_track if c != 0]   # 13 cells
+        # P2 (player 1): skip cell n-1 (right store = P1's)
+        p2_track = [c for c in full_track if c != n - 1]  # 13 cells
+        # Pad to same length, use cell 0 as padding (won't be reached)
+        max_tlen = max(len(p1_track), len(p2_track))
+        p1_track = p1_track + [0] * (max_tlen - len(p1_track))
+        p2_track = p2_track + [0] * (max_tlen - len(p2_track))
+        tracks = jnp.array([p1_track, p2_track], dtype=ACTION_DTYPE)  # (2, tlen)
+        track_len = jnp.array([len([c for c in full_track if c != 0]),
+                               len([c for c in full_track if c != n - 1])], dtype=ACTION_DTYPE)
+        # Build track_pos per player
+        track_pos = jnp.full((2, n), 0, dtype=ACTION_DTYPE)
+        for pi, trk in enumerate([p1_track, p2_track]):
+            for i, cell in enumerate(trk[:int(track_len[pi])]):
+                track_pos = track_pos.at[pi, cell].set(ACTION_DTYPE(i))
+    elif has_stores and n >= 4:
+        # No stores in track (Oware)
+        track = list(range(1, ppp + 1)) + list(range(2 * ppp, ppp, -1))
+        tlen = len(track)
+        # Same track for both players
+        tracks = jnp.array([track, track], dtype=ACTION_DTYPE)
+        track_len = jnp.array([tlen, tlen], dtype=ACTION_DTYPE)
+        track_pos = jnp.full((2, n), 0, dtype=ACTION_DTYPE)
+        for i, cell in enumerate(track):
+            track_pos = track_pos.at[0, cell].set(ACTION_DTYPE(i))
+            track_pos = track_pos.at[1, cell].set(ACTION_DTYPE(i))
     else:
-        track = list(range(n))
-    track_arr = jnp.array(track[:n], dtype=ACTION_DTYPE)
-    track_len = len(track_arr)
+        half = n // 2
+        track = list(range(half)) + list(range(n - 1, half - 1, -1))
+        tlen = len(track)
+        tracks = jnp.array([track, track], dtype=ACTION_DTYPE)
+        track_len = jnp.array([tlen, tlen], dtype=ACTION_DTYPE)
+        track_pos = jnp.full((2, n), 0, dtype=ACTION_DTYPE)
+        for i, cell in enumerate(track):
+            track_pos = track_pos.at[0, cell].set(ACTION_DTYPE(i))
+            track_pos = track_pos.at[1, cell].set(ACTION_DTYPE(i))
 
-    track_pos = jnp.full(n, 0, dtype=ACTION_DTYPE)
-    for i, cell in enumerate(track[:n]):
-        track_pos = track_pos.at[cell].set(i)
+    # Opposite pit lookup for Kalah capture: opposite(i) = i+ppp for P1 pits, i-ppp for P2 pits
+    opposite = jnp.full(n, n, dtype=ACTION_DTYPE)  # n = no opposite
+    if has_stores and n >= 4:
+        for i in range(1, ppp + 1):
+            opposite = opposite.at[i].set(ACTION_DTYPE(i + ppp))
+        for i in range(ppp + 1, 2 * ppp + 1):
+            opposite = opposite.at[i].set(ACTION_DTYPE(i - ppp))
 
-    pit_owner_init = jnp.concatenate([
-        jnp.zeros(half, dtype=BOARD_DTYPE),
-        jnp.ones(n - half, dtype=BOARD_DTYPE)
-    ])
+    # Store indices per player: P1's store = right (n-1), P2's store = left (0)
+    player_store = jnp.array([n - 1, 0], dtype=ACTION_DTYPE) if has_stores and n >= 4 else jnp.array([0, 0], dtype=ACTION_DTYPE)
+
+    # Pit ownership
+    if has_stores and n >= 4:
+        pit_owner_init = jnp.full(n, BOARD_DTYPE(-1))
+        for i in range(1, ppp + 1):
+            pit_owner_init = pit_owner_init.at[i].set(BOARD_DTYPE(0))
+        for i in range(ppp + 1, 2 * ppp + 1):
+            pit_owner_init = pit_owner_init.at[i].set(BOARD_DTYPE(1))
+        pit_owner_init = pit_owner_init.at[right_store].set(BOARD_DTYPE(0))
+        pit_owner_init = pit_owner_init.at[left_store].set(BOARD_DTYPE(1))
+    else:
+        half = n // 2
+        pit_owner_init = jnp.concatenate([
+            jnp.zeros(half, dtype=BOARD_DTYPE),
+            jnp.ones(n - half, dtype=BOARD_DTYPE)
+        ])
 
     def legal_fn(state):
         owned = (state.pit_owner == state.current_player)
@@ -280,28 +409,42 @@ def compile_sow(topology, num_players, initial_seeds=4, has_stores=True):
 
     def apply_fn(state, action):
         pit = action
+        cp = state.current_player
         seeds = state.seed_counts[pit]
         sc = state.seed_counts.at[pit].set(0)
-        start_pos = track_pos[pit]
+        start_pos = track_pos[cp, pit]
+        tlen = track_len[cp]
+        trk = tracks[cp]
 
         def sow_one(i, counts):
-            pos = (start_pos + i + 1) % track_len
-            cell = track_arr[pos]
+            pos = (start_pos + i + 1) % tlen
+            cell = trk[pos]
             return counts.at[cell].add(1)
 
         sc = jax.lax.fori_loop(0, seeds, sow_one, sc)
 
         # Find where last seed landed
-        last_pos = (start_pos + seeds) % track_len
-        last_cell = track_arr[last_pos]
+        last_pos = (start_pos + seeds) % tlen
+        last_cell = trk[last_pos]
 
         # Extra turn if last seed landed in player's store
-        landed_in_own_store = is_store[last_cell] & (state.pit_owner[last_cell] == state.current_player)
+        landed_in_own_store = is_store[last_cell] & (state.pit_owner[last_cell] == cp)
 
-        # Update phase_step_count: if extra turn, don't advance (subtract 1 so next player calc stays same)
+        # Kalah capture: if last seed lands in own empty pit (now has 1) and opposite has seeds
+        if stores_in_track:
+            is_own_pit = (state.pit_owner[last_cell] == cp) & ~is_store[last_cell]
+            was_empty = (sc[last_cell] == 1)  # exactly 1 = was empty before sowing this seed
+            opp = opposite[last_cell]
+            opp_has_seeds = (opp < n) & (sc[opp.clip(0, n - 1)] > 0)
+            do_capture = is_own_pit & was_empty & opp_has_seeds & ~landed_in_own_store
+
+            my_store = player_store[cp]
+            captured = sc[opp.clip(0, n - 1)] + sc[last_cell]
+            sc = jax.lax.select(do_capture, sc.at[my_store].add(captured).at[last_cell].set(0).at[opp.clip(0, n - 1)].set(0), sc)
+
         phase_adj = jax.lax.select(landed_in_own_store, BOARD_DTYPE(-1), BOARD_DTYPE(0))
 
-        pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(pit)).at[num_players].set(ACTION_DTYPE(last_cell))
+        pa = state.previous_actions.at[cp].set(ACTION_DTYPE(pit)).at[num_players].set(ACTION_DTYPE(last_cell))
         return state._replace(seed_counts=sc, previous_actions=pa,
                               phase_step_count=state.phase_step_count + phase_adj)
 
@@ -327,10 +470,12 @@ def compile_dice_move(topology, piece_idx, num_players):
     return legal_fn, apply_fn
 
 
-def combine_move_fns(legal_fns, apply_fns, num_sites):
+def combine_move_fns(legal_fns, apply_fns, num_sites, priority_indices=None):
     """Combine multiple movement types into single legal/apply pair.
 
     OR the legal masks, dispatch apply by checking which mask matched.
+    priority_indices: if set, these legal_fn indices have priority (forced captures).
+    When any priority move is legal, non-priority moves are masked out.
     """
     from ..runtime import state as state_mod
 
@@ -339,8 +484,20 @@ def combine_move_fns(legal_fns, apply_fns, num_sites):
             return legal_fns[0](state).flatten().astype(BOARD_DTYPE)
         return combined_legal, apply_fns[0]
 
+    if priority_indices is not None:
+        _pri_mask = jnp.zeros(len(legal_fns), dtype=jnp.bool_)
+        for pi in priority_indices:
+            _pri_mask = _pri_mask.at[pi].set(True)
+
     def combined_legal(state):
         masks = jnp.stack([fn(state).flatten() for fn in legal_fns])
+        if priority_indices is not None:
+            # Weight priority moves: if any exists, mask out non-priority
+            pri_only = masks * _pri_mask[:, jnp.newaxis]
+            has_priority = pri_only.any()
+            all_moves = masks.any(axis=0).astype(BOARD_DTYPE)
+            pri_flat = pri_only.any(axis=0).astype(BOARD_DTYPE)
+            return jnp.where(has_priority, pri_flat, all_moves)
         return masks.any(axis=0).astype(BOARD_DTYPE)
 
     def combined_apply(state, action):

@@ -11,6 +11,7 @@ import re
 from .parser.parse import parse, find_child, find_all, get_text
 from .analysis.game_info import extract_game_info
 from .analysis.topology import BoardTopology
+from .analysis.sites import evaluate_sites
 from .runtime.lookup import (
     build_slide_lookup, build_hop_between_lookup,
     build_line_indices, build_edge_mask,
@@ -72,12 +73,23 @@ def compile(lud_text_or_path: str):
     piece_names = [p.name for p in info.pieces] if info.pieces else ["token"]
 
     if info.is_mancala:
-        legal_fn, apply_fn, initial_seeds, pit_owner = compile_sow(topo, np, info.mancala_seeds)
+        # Detect stores-in-track: Kalah-style has "moveAgain" tied to store landing
+        # Oware-style has no store sowing (track starts at pit 1, not store 0)
+        stores_in_track = "moveAgain" in info.full_text and "mapEntry" in info.full_text
+        legal_fn, apply_fn, initial_seeds, pit_owner = compile_sow(
+            topo, np, info.mancala_seeds, stores_in_track=stores_in_track)
         action_size = topo.num_sites
 
-        def start_fn(state):
-            sc = jnp.full(topo.num_sites, BOARD_DTYPE(initial_seeds))
-            return state._replace(seed_counts=sc, pit_owner=pit_owner)
+        # Initial seeds: only on pits, not on stores
+        ppp = (topo.num_sites - 2) // 2 if topo.num_sites >= 4 else topo.num_sites // 2
+        def start_fn(state, _seeds=initial_seeds, _po=pit_owner, _n=topo.num_sites, _ppp=ppp):
+            sc = jnp.zeros(_n, dtype=BOARD_DTYPE)
+            # Set seeds only on pit cells (1..ppp and ppp+1..2*ppp)
+            for i in range(1, _ppp + 1):
+                sc = sc.at[i].set(BOARD_DTYPE(_seeds))
+            for i in range(_ppp + 1, 2 * _ppp + 1):
+                sc = sc.at[i].set(BOARD_DTYPE(_seeds))
+            return state._replace(seed_counts=sc, pit_owner=_po)
 
     elif info.is_dice:
         legal_fn, apply_fn = compile_dice_move(topo, piece_idx, np)
@@ -171,23 +183,21 @@ def compile(lud_text_or_path: str):
             apply_fns = []
 
             # Detect direction restrictions from piece definitions
-            # On 8-dir boards: diagonal=[0,2,5,7], orthogonal=[1,3,4,6], forward=[0,1,2]
             piece_text = play_text
             for p in info.pieces:
                 piece_text += " " + info.piece_content.get(p.name, "")
             # Direction indices for 8-dir grid (Ludii convention, row 0 = bottom):
             # 0=N(up), 1=NE, 2=E(right), 3=SE, 4=S(down), 5=SW, 6=W(left), 7=NW
-            # Diagonal: NE=1, SE=3, SW=5, NW=7
-            # Orthogonal: N=0, E=2, S=4, W=6
-            # Forward (P1 moves N/up): N=0, NE=1, NW=7
-            # Forward diagonal: NE=1, NW=7
             step_dirs = None
             hop_dirs = None
             if topo.max_neighbors == 8:
                 DIAG = [1, 3, 5, 7]
                 ORTHO = [0, 2, 4, 6]
-                FWD = [0, 1, 7]  # N, NE, NW (for P1)
-                FWD_DIAG = [1, 7]  # NE, NW
+                # Per-player forward directions
+                P1_FWD = [0, 1, 7]       # N, NE, NW
+                P1_FWD_DIAG = [1, 7]     # NE, NW
+                P2_FWD = [4, 3, 5]       # S, SE, SW
+                P2_FWD_DIAG = [3, 5]     # SE, SW
 
                 if "Diagonal" in piece_text and "Orthogonal" not in piece_text:
                     step_dirs = DIAG
@@ -196,22 +206,43 @@ def compile(lud_text_or_path: str):
                     step_dirs = ORTHO
                     hop_dirs = ORTHO
 
-                if "Forward" in piece_text:
+                has_forward = "Forward" in piece_text or (info.has_set_forward and ("FR" in piece_text or "FL" in piece_text))
+                if has_forward and info.has_set_forward:
+                    # Per-player direction: (p1_dirs, p2_dirs) tuple
                     if step_dirs and set(step_dirs) == set(DIAG):
-                        step_dirs = FWD_DIAG  # Forward diagonal only
+                        step_dirs = (P1_FWD_DIAG, P2_FWD_DIAG)
                     elif step_dirs:
-                        step_dirs = [d for d in step_dirs if d in FWD]
+                        step_dirs = ([d for d in step_dirs if d in P1_FWD],
+                                     [d for d in step_dirs if d in P2_FWD])
                     else:
-                        step_dirs = FWD
+                        step_dirs = (P1_FWD, P2_FWD)
+                    if hop_dirs and set(hop_dirs) == set(DIAG):
+                        hop_dirs = (P1_FWD_DIAG, P2_FWD_DIAG)
+                    else:
+                        hop_dirs = (P1_FWD_DIAG, P2_FWD_DIAG)
+                elif has_forward:
+                    # Non-set_forward game: use P1 directions for all
+                    if step_dirs and set(step_dirs) == set(DIAG):
+                        step_dirs = P1_FWD_DIAG
+                    elif step_dirs:
+                        step_dirs = [d for d in step_dirs if d in P1_FWD]
+                    else:
+                        step_dirs = P1_FWD
+
+            has_chain = info.has_extra_turn and "moveAgain" in info.full_text and info.has_hop
+            has_priority = "priority" in play_text and info.has_hop
+            hop_fn_indices = []  # track which indices in legal_fns are hop functions
 
             for pi, p in enumerate(info.pieces if info.pieces else [type('P', (), {'name': 'token'})()]):
                 if info.has_step or (not info.has_hop and not info.has_slide and not info.has_leap):
-                    l, a = compile_step(topo, slide_lookup, pi, np, directions=step_dirs)
+                    l, a = compile_step(topo, slide_lookup, pi, np, directions=step_dirs,
+                                        reset_chain=has_chain)
                     legal_fns.append(l)
                     apply_fns.append(a)
                 if info.has_hop:
                     hop_over = "mover" if ("is Friend" in info.full_text and "between" in info.full_text) else "opponent"
-                    l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over, directions=hop_dirs)
+                    hop_fn_indices.append(len(legal_fns))
+                    l, a = compile_hop(topo, slide_lookup, hop_between, pi, np, hop_over=hop_over, directions=hop_dirs, chain_capture=has_chain)
                     legal_fns.append(l)
                     apply_fns.append(a)
 
@@ -227,7 +258,8 @@ def compile(lud_text_or_path: str):
                 apply_fns.append(a)
 
             if legal_fns:
-                legal_fn, apply_fn = combine_move_fns(legal_fns, apply_fns, topo.num_sites)
+                pri = hop_fn_indices if has_priority and hop_fn_indices else None
+                legal_fn, apply_fn = combine_move_fns(legal_fns, apply_fns, topo.num_sites, priority_indices=pri)
                 action_size = topo.num_sites * topo.num_sites
             else:
                 legal_fn, apply_fn = compile_place(topo, piece_idx, np)
@@ -291,12 +323,11 @@ def compile(lud_text_or_path: str):
 
 
 def _build_start_fn(tree, info, topo):
-    """Build the start function that places initial pieces."""
-    rules = find_child(tree, "rules")
-    if not rules:
-        return lambda state: state
+    """Build the start function that places initial pieces.
 
-    full_text = get_text(rules)
+    Uses the recursive site set evaluator from analysis.sites to handle
+    compound expressions like difference(expand(sites Bottom, steps:2), sites Phase 1).
+    """
     n = topo.num_sites
     piece_names = [p.name for p in info.pieces]
     piece_name = piece_names[0] if piece_names else "token"
@@ -310,256 +341,52 @@ def _build_start_fn(tree, info, topo):
             name = piece_name
         return name
 
+    # Extract start section text from parse tree (not full rules text)
+    start_text = ""
+    rules = find_child(tree, "rules")
+    if rules:
+        rules_content = find_child(rules, "rules_content")
+        if rules_content:
+            for item in find_all(rules_content, "rules_item"):
+                start_node = find_child(item, "start")
+                if start_node:
+                    start_text = get_text(start_node)
+                    break
+
+    if not start_text:
+        # Fallback: use full rules text
+        start_text = get_text(rules) if rules else ""
+
     placements = []  # [(piece_idx, player, [cell_indices])]
 
-    # Expand placement: place "Name" expand sites Bottom/Top steps:N
-    for m in re.finditer(r'place\s+"([^"]+)"\s+expand\s+(?:\(?sites\s+)?(Left|Right|Bottom|Top|Centre)(?:\s+steps:?\s*(?:-\s*)?(\d+))?', full_text):
+    # Find all place "Name" <expression> patterns
+    # Split on 'place' boundaries to get each placement's expression
+    place_parts = re.split(r'(?=place\s+(?:Stack\s+)?")', start_text)
+    for part in place_parts:
+        m = re.match(r'place\s+(?:Stack\s+)?"([^"]+)"\s+(.*)', part, re.DOTALL)
+        if not m:
+            continue
         pname_raw = m.group(1)
-        region = m.group(2).lower()
-        steps_str = m.group(3)
-        # Parse steps — may be "steps: - 2 1" (expression) or "steps:2"
-        steps = 1
-        if steps_str:
-            steps = int(steps_str)
-        else:
-            # Check for expression like "steps: - 2 1" = 2-1 = 1
-            steps_match = re.search(r'steps:\s*(?:-\s*)?(\d+)\s*(\d+)?', full_text[m.start():m.start()+60])
-            if steps_match:
-                if steps_match.group(2):
-                    steps = int(steps_match.group(1)) - int(steps_match.group(2))
-                else:
-                    steps = int(steps_match.group(1))
+        expr = m.group(2).strip()
 
         pname = resolve_name(pname_raw)
         player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        if region == "centre":
-            cx = sum(x for x, _ in topo.site_coords) / n if n > 0 else 0
-            cy = sum(y for _, y in topo.site_coords) / n if n > 0 else 0
-            indices = sorted(range(n), key=lambda i: abs(topo.site_coords[i][0] - cx) + abs(topo.site_coords[i][1] - cy))[:n//3]
-        elif region in topo.regions:
-            base = set(i for i in range(n) if topo.regions[region][i])
-            # Expand N steps (BFS)
-            expanded = set(base)
-            frontier = set(base)
-            for _ in range(steps):
-                new_frontier = set()
-                for idx in frontier:
-                    for d in range(topo.max_neighbors):
-                        nb = int(topo.adjacency[d, idx])
-                        if nb < n and nb not in expanded:
-                            new_frontier.add(nb)
-                            expanded.add(nb)
-                frontier = new_frontier
-            indices = sorted(expanded)
-        else:
-            quarter = max(n // 4, 1) * (steps + 1)
-            indices = list(range(min(quarter, n))) if region in ("bottom", "left") else list(range(max(0, n - quarter), n))
-        if pname in piece_names and indices:
-            placements.append((piece_names.index(pname), player, indices))
 
-    # Intersection pattern: place "Name" intersection (sites Phase N) (union (sites Top) (sites Bottom))
-    for m in re.finditer(r'place\s+"([^"]+)"\s+intersection\s+sites\s+Phase\s+(\d+)\s+.*?(Top|Bottom|Left|Right)', full_text):
-        pname_raw = m.group(1)
-        phase = int(m.group(2))
-        region = m.group(3).lower()
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        phase_cells = set(i for i in range(n) if i % 2 == phase)
-        if region in topo.regions:
-            region_cells = set(i for i in range(n) if topo.regions[region][i])
-        else:
-            quarter = max(n // 4, 1)
-            region_cells = set(range(quarter)) if region == "bottom" else set(range(n - quarter, n))
-        # Also check for "union" — include multiple regions
-        for extra_region in re.findall(r'sites\s+(Top|Bottom|Left|Right)', full_text[m.start():m.start()+200]):
-            r = extra_region.lower()
-            if r in topo.regions:
-                region_cells |= set(i for i in range(n) if topo.regions[r][i])
-            elif r == "top":
-                region_cells |= set(range(n - max(n // 4, 1), n))
-            elif r == "bottom":
-                region_cells |= set(range(max(n // 4, 1)))
-        indices = sorted(phase_cells & region_cells)
-        if pname in piece_names and indices:
-            placements.append((piece_names.index(pname), player, indices))
+        # Extract state:N parameter (overrides player from name)
+        state_m = re.search(r'state:\s*(\d+)', expr)
+        if state_m:
+            player = int(state_m.group(1)) - 1  # Ludii state:1 = player 0, state:2 = player 1
+            expr = expr[:state_m.start()].strip()
 
-    # Phase-based placement: place "Name" sites Phase N
-    for m in re.finditer(r'place\s+"([^"]+)"\s+(?:intersection\s+)?sites\s+Phase\s+(\d+)', full_text):
-        pname_raw = m.group(1)
-        phase = int(m.group(2))
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        # Phase 0 = even cells, Phase 1 = odd cells (checkerboard)
-        indices = [i for i in range(n) if i % 2 == phase]
-        if pname in piece_names and indices:
-            placements.append((piece_names.index(pname), player, indices))
-
-    # Region-based placement: (sites Bottom), (sites Top), etc.
-    for m in re.finditer(r'place\s+"([^"]+)"\s+(?:\(?sites\s+)(Bottom|Top|Left|Right)', full_text):
-        pname_raw = m.group(1)
-        region = m.group(2).lower()
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        if region in topo.regions:
-            indices = [i for i in range(n) if topo.regions[region][i]]
-        else:
-            # Approximate: bottom = first quarter, top = last quarter
-            quarter = max(n // 4, 1)
-            if region == "bottom":
-                indices = list(range(quarter))
-            elif region == "top":
-                indices = list(range(n - quarter, n))
-            elif region == "left":
-                indices = [i for i in range(n) if topo.site_coords[i][0] < topo.site_coords[n//2][0]]
-            elif region == "right":
-                indices = [i for i in range(n) if topo.site_coords[i][0] > topo.site_coords[n//2][0]]
-            else:
-                indices = []
-        if pname in piece_names and indices:
-            placements.append((piece_names.index(pname), player, indices))
-
-    # Expand pattern: (expand (sites Bottom/Top))
-    if not placements:
-        for m in re.finditer(r'place\s+"([^"]+)"\s+expand\s+sites\s+(Bottom|Top)', full_text):
-            pname_raw = m.group(1)
-            region = m.group(2).lower()
-            pname = resolve_name(pname_raw)
-            player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-            if region in topo.regions:
-                indices = [i for i in range(n) if topo.regions[region][i]]
-            else:
-                half = max(n // 4, 1)
-                indices = list(range(half)) if region == "bottom" else list(range(n - half, n))
-            if pname in piece_names and indices:
-                placements.append((piece_names.index(pname), player, indices))
-
-    # Union pattern: place "Name" union expand sites Bottom sites "A3" ...
-    for m in re.finditer(r'place\s+"([^"]+)"\s+union\s+(.*?)(?=place\s+"|$)', full_text):
-        pname_raw = m.group(1)
-        union_text = m.group(2)
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        indices = set()
-        # Collect all region references
-        for region_name in re.findall(r'sites\s+(Bottom|Top|Left|Right|Outer|Board)', union_text):
-            r = region_name.lower()
-            if r in topo.regions:
-                indices |= {i for i in range(n) if topo.regions[r][i]}
-            elif r == "board":
-                indices |= set(range(n))
-        # Collect expand patterns
-        for expand_m in re.finditer(r'expand\s+sites\s+(Bottom|Top)', union_text):
-            r = expand_m.group(1).lower()
-            base = {i for i in range(n) if topo.regions.get(r, [False]*n)[i]} if r in topo.regions else set()
-            expanded = set(base)
-            for idx in base:
-                for d in range(topo.max_neighbors):
-                    nb = int(topo.adjacency[d, idx])
-                    if nb < n: expanded.add(nb)
-            indices |= expanded
-        # Collect coord references
-        for coord in re.findall(r'"([A-Za-z]\d+)"', union_text):
-            col = ord(coord[0].upper()) - ord('A')
-            row = int(coord[1:]) - 1
-            if topo.site_coords:
-                best = min(range(n), key=lambda i: abs(topo.site_coords[i][0] - col) + abs(topo.site_coords[i][1] - row))
-                indices.add(best)
-        # Collect Column references
-        for col_m in re.finditer(r'Column\s+(\d+)', union_text):
-            col = int(col_m.group(1))
-            indices |= {i for i in range(n) if topo.site_coords and abs(topo.site_coords[i][0] - col) < 0.5}
+        # Evaluate the site set expression
+        indices = evaluate_sites(expr, topo)
         if pname in piece_names and indices:
             placements.append((piece_names.index(pname), player, sorted(indices)))
-
-    # Sites Board/Empty/Outer pattern: fill cells
-    for m in re.finditer(r'place\s+"([^"]+)"\s+sites\s+(Board|Empty|Outer)', full_text):
-        pname_raw = m.group(1)
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        if pname in piece_names:
-            placements.append((piece_names.index(pname), player, list(range(n))))
-
-    # handSite placement: means pieces start off-board, should use placement mechanic
-    # (handled by routing, not start_fn — pieces enter via play)
-
-    # centrePoint pattern: place "Name" centrePoint
-    for m in re.finditer(r'place\s+(?:Stack\s+)?"([^"]+)"\s+centrePoint', full_text):
-        pname_raw = m.group(1)
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        center = n // 2
-        if pname in piece_names:
-            placements.append((piece_names.index(pname), player, [center]))
-
-    # Multi-coord placement: place "Name" {"A1" "C1" "E1"}
-    for m in re.finditer(r'place\s+"([^"]+)"\s+("(?:[A-Za-z]\d+)"\s*(?:"[A-Za-z]\d+"?\s*)*)', full_text):
-        pname_raw = m.group(1)
-        coords_str = m.group(2)
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        coords = re.findall(r'"([A-Za-z]\d+)"', coords_str)
-        indices = []
-        for coord in coords:
-            col = ord(coord[0].upper()) - ord('A')
-            row = int(coord[1:]) - 1
-            if topo.site_coords:
-                best = min(range(n), key=lambda i: abs(topo.site_coords[i][0] - col) + abs(topo.site_coords[i][1] - row))
-                indices.append(best)
-        if pname in piece_names and indices:
-            placements.append((piece_names.index(pname), player, indices))
-
-    # Direct cell index: place "Name" N or place "Name" N count:M
-    for m in re.finditer(r'place\s+(?:Stack\s+)?"([^"]+)"\s+(\d+)', full_text):
-        pname_raw = m.group(1)
-        cell = int(m.group(2))
-        if cell < n:
-            pname = resolve_name(pname_raw)
-            player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-            if pname in piece_names:
-                placements.append((piece_names.index(pname), player, [cell]))
-
-    # Coord placement: place "Name" "A1" or place "Name" coord:"A1"
-    for m in re.finditer(r'place\s+"([^"]+)"\s+(?:coord:)?"([A-Za-z]\d+)"', full_text):
-        pname_raw = m.group(1)
-        coord = m.group(2)
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        # Convert chess notation to index
-        col = ord(coord[0].upper()) - ord('A')
-        row = int(coord[1:]) - 1
-        # Find nearest site in topology
-        if topo.site_coords:
-            best_idx = min(range(n), key=lambda i: abs(topo.site_coords[i][0] - col) + abs(topo.site_coords[i][1] - row))
-            if pname in piece_names:
-                placements.append((piece_names.index(pname), player, [best_idx]))
-
-    # Site-list pattern: place "Name" sites 2 3 4 ...
-    for m in re.finditer(r'place\s+"([^"]+)"\s+(?:\(?sites\s+)?\{?(\d[\d\s]+)\}?', full_text):
-        pname_raw = m.group(1)
-        indices = [int(x) for x in re.findall(r'\d+', m.group(2))]
-        indices = [i for i in indices if i < n]
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        if pname in piece_names and indices:
-            placements.append((piece_names.index(pname), player, indices))
-
-    # Row pattern: place "Name" Row N
-    for m in re.finditer(r'place\s+"([^"]+)"\s+(?:\(?sites )?Row (\d+)\)?', full_text):
-        pname_raw = m.group(1)
-        row = int(m.group(2))
-        pname = resolve_name(pname_raw)
-        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
-        # Compute row indices from topology coords
-        if topo.site_coords:
-            row_indices = [i for i, (x, y) in enumerate(topo.site_coords) if int(round(y)) == row]
-            if pname in piece_names and row_indices:
-                placements.append((piece_names.index(pname), player, row_indices))
 
     if not placements:
         # Fallback: auto-place for movement games (even without explicit start placement)
         has_movement = info.has_step or info.has_hop or info.has_slide or "forEach Piece" in info.full_text
-        if has_movement and n >= 4:
-            # Place on first/last rows
+        if has_movement and n >= 4 and topo.site_coords:
             first_row = [i for i, (x, y) in enumerate(topo.site_coords) if y == min(yy for _, yy in topo.site_coords)]
             last_row = [i for i, (x, y) in enumerate(topo.site_coords) if y == max(yy for _, yy in topo.site_coords)]
             if first_row and last_row:

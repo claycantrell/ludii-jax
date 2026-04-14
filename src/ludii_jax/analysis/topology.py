@@ -164,6 +164,15 @@ def _grid(width: int, height: int) -> BoardTopology:
         "right": np.array([i % width == width - 1 for i in range(n)]),
     }
 
+    # Centre region: the inner cells closest to the center of the board
+    cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+    centre = np.zeros(n, dtype=bool)
+    for idx in range(n):
+        r, c = idx // width, idx % width
+        if abs(c - cx) < 1.0 and abs(r - cy) < 1.0:
+            centre[idx] = True
+    regions["centre"] = centre
+
     return BoardTopology(n, adj, 8, coords, regions)
 
 
@@ -184,8 +193,8 @@ def _hex_regular(side_length: int) -> BoardTopology:
 
     n = len(coords)
     assert n == n_cells, f"Hex {side_length}: expected {n_cells}, got {n}"
-    # 6 hex directions: E, NE, NW, W, SW, SE
-    hex_offsets = [(1, 0), (0, -1), (-1, -1), (-1, 0), (0, 1), (1, 1)]
+    # 6 hex axial directions: E, NE, NW, W, SW, SE  (dq, dr)
+    hex_offsets = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]
     adj = np.full((6, n), n, dtype=np.int16)
 
     for (q, r), idx in idx_map.items():
@@ -242,7 +251,7 @@ def _hex_diamond(n: int) -> BoardTopology:
             coords.append((x, y))
 
     num_sites = len(coords)
-    hex_offsets = [(1, 0), (0, -1), (-1, -1), (-1, 0), (0, 1), (1, 1)]
+    hex_offsets = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]
     adj = np.full((6, num_sites), num_sites, dtype=np.int16)
 
     for (r, c), idx in idx_map.items():
