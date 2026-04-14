@@ -20,34 +20,49 @@ JAVA_SRC = os.path.join(TESTS_DIR, "generate_trace.java")
 
 # Key games to validate — cover different mechanics
 TEST_GAMES = {
-    # Placement games — simple, well-tested
+    # Placement — line
     "Tic-Tac-Toe": "board/space/line/Tic-Tac-Toe.lud",
     "Gomoku": "board/space/line/Gomoku.lud",
-    "Hex": "board/space/connection/Hex.lud",
     "Yavalath": "board/space/line/Yavalath.lud",
-    "Reversi": "board/space/territory/Reversi.lud",
     "Pente": "board/space/line/Pente.lud",
+    "Connect Four": "board/space/line/Connect Four.lud",
+    "Nine Mens Morris": "board/space/line/Nine Men's Morris.lud",
 
-    # More placement
+    # Placement — connection
+    "Hex": "board/space/connection/Hex.lud",
+    "Y": "board/space/connection/Y (Hex).lud",
     "Havannah": "board/space/connection/Havannah.lud",
-    "Twixt": "board/space/connection/TwixT.lud",
-    "Clobber": "board/space/blocking/Clobber.lud",
+    # "Twixt": not in expanded corpus
 
-    # Movement games
+    # Placement — territory
+    "Reversi": "board/space/territory/Reversi.lud",
+    "Go": "board/space/territory/Go.lud",
+
+    # Placement — blocking
+    "Clobber": "board/war/replacement/stalemate/Clobber.lud",
+
+    # Movement — leaping
     "English Draughts": "board/war/leaping/diagonal/English Draughts.lud",
+    "Brazilian Draughts": "board/war/leaping/diagonal/Brazilian Draughts.lud",
+    "International Draughts": "board/war/leaping/diagonal/International Draughts.lud",
+
+    # Movement — stepping
     "Wolf and Sheep": "board/hunt/Wolf and Sheep.lud",
-    "Agon": "board/space/blocking/Agon.lud",
+    "Agon": "board/race/fill/Agon.lud",
+    "Breakthrough": "board/race/reach/Breakthrough.lud",
+    "Konane": "board/war/leaping/orthogonal/Konane.lud",
+    "Fanorona": "board/war/direction/linear/Fanorona.lud",
+
+    # Movement — sliding
+    "Tablut": "board/war/custodial/Tablut.lud",
 
     # Mancala
     "Oware": "board/sow/two_rows/Oware.lud",
     "Kalah": "board/sow/two_rows/Kalah.lud",
 
-    # Connection
-    "Y": "board/space/connection/Y (Hex).lud",
-
-    # Line games with effects
-    "Hasami Shogi": "board/war/custodial/Hasami Shogi.lud",
-    "Dai Hasami Shogi": "board/war/custodial/Dai Hasami Shogi.lud",
+    # Custodial
+    "Hasami Shogi": "board/war/replacement/checkmate/shogi/Hasami Shogi.lud",
+    "Dai Hasami Shogi": "board/space/line/Dai Hasami Shogi.lud",
 }
 
 
