@@ -1,0 +1,57 @@
+// Permissive Ludii grammar: validates top-level structure, accepts any S-expression inside.
+// Phase 1: parse everything, validate semantics during compilation.
+
+game: "(" "game" ESCAPED_STRING players game_mode? equipment rules ")"
+game_mode: "(" "mode" KEYWORD ")"
+
+// Top-level sections — must be present
+players: "(" "players" player_content ")"
+equipment: "(" "equipment" "{" equip_item+ "}" ")"
+rules: "(" "rules" rules_content ")"
+
+// Players: just accept the content
+player_content: SIGNED_INT | "{" sexp+ "}"
+
+// Equipment items: board, piece, regions, hand, dice, map, etc.
+equip_item: "(" equip_type equip_content ")"
+equip_type: "board" | "piece" | "regions" | "hand" | "dice" | "map" | "card" | "domino" | "tile"
+          | "mancalaBoard" | "track" | "hints" | "values" | "surakartaBoard"
+equip_content: sexp_content
+
+// Rules: meta, start, play, phases, end — flexible ordering
+// End can be at rules level OR inside the last phase
+rules_content: rules_item+
+rules_item: meta | start | play | phases | end
+meta: "(" "meta" sexp_content ")"
+start: "(" "start" sexp_content ")"
+play: "(" "play" sexp_content ")"
+phases: "phases:" "{" phase+ "}" | "phases" ":" "{" phase+ "}"
+phase: "(" "phase" sexp_content ")"
+end: "(" "end" sexp_content ")"
+
+// Generic S-expression: matches ANY balanced parenthetical/brace structure
+// This is the permissive core — accepts anything Ludii can write
+sexp: "(" sexp_content ")" | "{" sexp_content "}"
+sexp_content: sexp_atom*
+sexp_atom: sexp                    // nested expression
+         | "{" sexp_content "}"    // braced group
+         | ESCAPED_STRING          // "string"
+         | SIGNED_INT              // 42, -1
+         | SIGNED_FLOAT            // 3.14, -0.5
+         | BOOL                    // True, False, true, false
+         | KEYWORD                 // any keyword/identifier
+         | COLON_ARG               // key:value arguments like if:, to:, exact:, direction:, use:
+         | OPERATOR                // =, <, >, <=, >=, !=, +, -, *, /
+
+// Tokens
+KEYWORD: /[A-Za-z_!?][A-Za-z0-9_!?]*/
+COLON_ARG: /[A-Za-z_][A-Za-z0-9_]*:[^\s(){}]*/
+OPERATOR: /[=<>!+\-*\/%^][=]?/ | "~"
+BOOL: "True" | "False" | "true" | "false"
+SIGNED_INT: /[+-]?\d+/
+SIGNED_FLOAT: /[+-]?\d+\.\d*/
+
+%import common.ESCAPED_STRING
+%import common.WS
+%ignore WS
+%ignore /\/\/.*/
