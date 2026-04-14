@@ -177,7 +177,7 @@ Tested against the full Ludii game corpus (1,212 expanded games):
 - [JAX](https://github.com/jax-ml/jax) — hardware-accelerated numerical computing
 - [Lark](https://github.com/lark-parser/lark) — parsing toolkit
 - [PGX](https://github.com/sotetsuk/pgx) — JAX game environments (inspiration for the API)
-- [Ludax](https://github.com/gdrtodd/ludax) — earlier JAX board game engine (Grant Todd)
+- [Ludax](https://github.com/gdrtodd/ludax) — JAX board game DSL and compiler (Grant Todd). This project builds on ideas and patterns from Ludax.
 
 ## License
 
