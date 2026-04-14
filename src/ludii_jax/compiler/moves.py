@@ -216,9 +216,20 @@ def compile_place(topology, piece_idx, num_players):
     return legal_fn, apply_fn
 
 
-def compile_sow(topology, num_players, initial_seeds=4):
+def compile_sow(topology, num_players, initial_seeds=4, has_stores=True):
     """Compile mancala sowing: pick a pit, distribute seeds along track."""
     n = topology.num_sites
+    # For mancala with stores: stores are non-sowable cells
+    # Standard layout: P1 pits, P1 store, P2 pits, P2 store
+    if has_stores and n >= 4:
+        pits_per_player = (n - 2) // 2
+        p1_store = pits_per_player
+        p2_store = n - 1
+        is_store = jnp.zeros(n, dtype=jnp.bool_).at[p1_store].set(True).at[p2_store].set(True)
+    else:
+        pits_per_player = n // 2
+        is_store = jnp.zeros(n, dtype=jnp.bool_)
+
     half = n // 2
 
     # Build counter-clockwise track
@@ -242,7 +253,8 @@ def compile_sow(topology, num_players, initial_seeds=4):
     def legal_fn(state):
         owned = (state.pit_owner == state.current_player)
         has_seeds = (state.seed_counts > 0)
-        return (owned & has_seeds).astype(BOARD_DTYPE)
+        not_store = ~is_store
+        return (owned & has_seeds & not_store).astype(BOARD_DTYPE)
 
     def apply_fn(state, action):
         pit = action
