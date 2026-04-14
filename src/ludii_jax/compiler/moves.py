@@ -24,12 +24,12 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1):
 
     def legal_fn(state):
         owned = (state.board[piece_idx] == state.current_player)
-        empty = (state.board == EMPTY).all(axis=0)
-        # Step to empty cells only (safe default)
+        friendly = (state.board == state.current_player).any(axis=0)
+        # Can step to empty OR enemy cells (not friendly)
         dests = slide_lookup[:, :, distance]  # (max_nb, n)
         on_board = dests < n
-        dest_empty = empty.at[dests.clip(0, n - 1)].get()
-        valid = owned[jnp.newaxis, :] & dest_empty & on_board  # (max_nb, n)
+        dest_not_friendly = ~friendly.at[dests.clip(0, n - 1)].get()
+        valid = owned[jnp.newaxis, :] & dest_not_friendly & on_board  # (max_nb, n)
         # Scatter to flat mask
         flat_idx = arange_n[jnp.newaxis, :] * n + dests.clip(0, n - 1)
         mask = jnp.zeros(n * n, dtype=BOARD_DTYPE)
@@ -38,7 +38,8 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1):
 
     def apply_fn(state, action):
         src, dst = action // n, action % n
-        board = state.board.at[piece_idx, src].set(EMPTY)
+        board = state.board.at[:, dst].set(EMPTY)  # clear destination (capture)
+        board = board.at[piece_idx, src].set(EMPTY)
         board = board.at[piece_idx, dst].set(state.current_player)
         pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
         return state._replace(board=board, previous_actions=pa)

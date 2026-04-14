@@ -141,7 +141,7 @@ def compile(lud_text_or_path: str):
         full_text = info.full_text
         # Get just the play section text (not piece definitions)
         play_section = full_text[full_text.find("play"):] if "play" in full_text else full_text
-        play_has_add = any(kw in play_section for kw in ["move Add", "move Claim", "satisfy", "handSite"])
+        play_has_add = any(kw in play_section for kw in ["move Add", "move Claim", "satisfy", "handSite", "move Select", "move Remove", "forEach Site"])
         play_has_movement = any(kw in play_section for kw in ["forEach Piece", "move Step", "move Hop", "move Slide", "move Leap"])
         has_placement = play_has_add or "handSite" in full_text or "Hand" in full_text
         has_movement = play_has_movement
