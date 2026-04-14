@@ -343,6 +343,44 @@ def _build_start_fn(tree, info, topo):
             if pname in piece_names and indices:
                 placements.append((piece_names.index(pname), player, indices))
 
+    # Union pattern: place "Name" union expand sites Bottom sites "A3" ...
+    for m in re.finditer(r'place\s+"([^"]+)"\s+union\s+(.*?)(?=place\s+"|$)', full_text):
+        pname_raw = m.group(1)
+        union_text = m.group(2)
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        indices = set()
+        # Collect all region references
+        for region_name in re.findall(r'sites\s+(Bottom|Top|Left|Right|Outer|Board)', union_text):
+            r = region_name.lower()
+            if r in topo.regions:
+                indices |= {i for i in range(n) if topo.regions[r][i]}
+            elif r == "board":
+                indices |= set(range(n))
+        # Collect expand patterns
+        for expand_m in re.finditer(r'expand\s+sites\s+(Bottom|Top)', union_text):
+            r = expand_m.group(1).lower()
+            base = {i for i in range(n) if topo.regions.get(r, [False]*n)[i]} if r in topo.regions else set()
+            expanded = set(base)
+            for idx in base:
+                for d in range(topo.max_neighbors):
+                    nb = int(topo.adjacency[d, idx])
+                    if nb < n: expanded.add(nb)
+            indices |= expanded
+        # Collect coord references
+        for coord in re.findall(r'"([A-Za-z]\d+)"', union_text):
+            col = ord(coord[0].upper()) - ord('A')
+            row = int(coord[1:]) - 1
+            if topo.site_coords:
+                best = min(range(n), key=lambda i: abs(topo.site_coords[i][0] - col) + abs(topo.site_coords[i][1] - row))
+                indices.add(best)
+        # Collect Column references
+        for col_m in re.finditer(r'Column\s+(\d+)', union_text):
+            col = int(col_m.group(1))
+            indices |= {i for i in range(n) if topo.site_coords and abs(topo.site_coords[i][0] - col) < 0.5}
+        if pname in piece_names and indices:
+            placements.append((piece_names.index(pname), player, sorted(indices)))
+
     # Sites Board/Empty/Outer pattern: fill cells
     for m in re.finditer(r'place\s+"([^"]+)"\s+sites\s+(Board|Empty|Outer)', full_text):
         pname_raw = m.group(1)
@@ -350,6 +388,9 @@ def _build_start_fn(tree, info, topo):
         player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
         if pname in piece_names:
             placements.append((piece_names.index(pname), player, list(range(n))))
+
+    # handSite placement: means pieces start off-board, should use placement mechanic
+    # (handled by routing, not start_fn — pieces enter via play)
 
     # centrePoint pattern: place "Name" centrePoint
     for m in re.finditer(r'place\s+(?:Stack\s+)?"([^"]+)"\s+centrePoint', full_text):
