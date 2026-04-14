@@ -222,10 +222,11 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
 
 
 def compile_slide(topology, slide_lookup, piece_idx, num_players, max_distance=None,
-                   blocked_cells=None):
+                   blocked_cells=None, directions=None):
     """Compile slide movement: move any number of cells in a direction until blocked.
 
     blocked_cells: optional jnp bool array (n,) — cells that block sliding even when empty.
+    directions: list of direction indices to allow (None = all).
     """
     n = topology.num_sites
     max_nb = topology.max_neighbors
@@ -235,6 +236,15 @@ def compile_slide(topology, slide_lookup, piece_idx, num_players, max_distance=N
     general_idx = jnp.indices((n, max_nb, max_distance), dtype=ACTION_DTYPE)[2]
     occupied_pad = jnp.ones((n, max_nb, 1), dtype=ACTION_DTYPE)
     _blocked = blocked_cells if blocked_cells is not None else jnp.zeros(n, dtype=jnp.bool_)
+
+    # Direction mask for slide
+    if directions is not None:
+        _dir_mask = jnp.zeros(max_nb, dtype=jnp.bool_)
+        for d in directions:
+            if d < max_nb:
+                _dir_mask = _dir_mask.at[d].set(True)
+    else:
+        _dir_mask = jnp.ones(max_nb, dtype=jnp.bool_)
 
     def legal_fn(state):
         occupied = ((state.board != EMPTY).any(axis=0) | _blocked).astype(BOARD_DTYPE)
@@ -252,6 +262,19 @@ def compile_slide(topology, slide_lookup, piece_idx, num_players, max_distance=N
         mask = jnp.zeros((n, n), dtype=BOARD_DTYPE)
         mask = mask.at[arange_n[:, jnp.newaxis], valid_dests].set(1)
         mask = mask.at[arange_n, arange_n].set(0)
+
+        # Apply direction restriction: zero out columns for disabled directions
+        if directions is not None:
+            dir_valid = jnp.repeat(_dir_mask, max_distance)  # (max_nb * max_distance,)
+            # Reshape valid_dests was (n, max_nb*max_distance), mask built from it
+            # Simpler: recompute only for allowed directions
+            allowed_dests = jnp.where(
+                (_dir_mask[:, jnp.newaxis] & (general_idx < slide_until[:, :, jnp.newaxis])),
+                slide_indices, n + 1
+            ).reshape(n, -1)
+            mask = jnp.zeros((n, n), dtype=BOARD_DTYPE)
+            mask = mask.at[arange_n[:, jnp.newaxis], allowed_dests].set(1)
+            mask = mask.at[arange_n, arange_n].set(0)
 
         piece_mask = (state.board[piece_idx] == state.current_player).astype(BOARD_DTYPE)
         mask = jnp.where(piece_mask[:, jnp.newaxis], mask, jnp.zeros_like(mask))

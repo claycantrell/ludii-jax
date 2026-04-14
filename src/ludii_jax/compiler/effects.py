@@ -10,20 +10,25 @@ import jax.numpy as jnp
 from ..runtime.state import BOARD_DTYPE, ACTION_DTYPE, REWARD_DTYPE, EMPTY
 
 
-def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, num_players=2):
+def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, num_players=2,
+                               directions=None):
     """Custodial capture: remove enemy pieces sandwiched between friendly pieces.
 
     Vectorized: precompute all (endpoint1, middle, endpoint2) triples as arrays,
     then check all at once with JAX indexing.
+    directions: list of direction indices to check (None = all).
     """
     import numpy as np
     n = topology.num_sites
+    allowed_dirs = set(range(topology.max_neighbors)) if directions is None else set(directions)
 
     # Precompute custodial triples: (endpoint1, middle, endpoint2) for length=1
     endpoints1 = []
     middles = []
     endpoints2 = []
     for d in range(topology.max_neighbors):
+        if d not in allowed_dirs:
+            continue
         for site in range(n):
             pos = site
             line = [site]

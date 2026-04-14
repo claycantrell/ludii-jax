@@ -298,16 +298,26 @@ def compile(lud_text_or_path: str):
                     legal_fns.append(l)
                     apply_fns.append(a)
                 if info.has_slide:
-                    # Per-piece slide: detect blocked cells (throne in Tablut blocks non-king)
+                    # Per-piece slide settings
                     blocked = None
+                    slide_dirs = None
+                    pname = p.name if hasattr(p, 'name') else ''
+                    pcontent = info.piece_content.get(pname, '')
+
+                    # Direction restriction: Orthogonal slide = 4 directions on 8-dir board
+                    if topo.max_neighbors == 8:
+                        if "Orthogonal" in pcontent or ("Orthogonal" in piece_text and "Diagonal" not in pcontent):
+                            slide_dirs = [0, 2, 4, 6]  # N, E, S, W
+
+                    # Blocked cells (throne in Tablut blocks non-king)
                     if "centrePoint" in info.full_text and "between" in info.full_text:
-                        # Check if this piece is the king (owner-restricted or named king/jarl)
-                        pname = p.name if hasattr(p, 'name') else ''
-                        is_king = pname in ('jarl', 'king', 'konig') or (hasattr(p, 'owner') and p.owner == 'P1' and 'King' in info.full_text)
+                        is_king = pname in ('jarl', 'king', 'konig')
                         if not is_king:
                             blocked = jnp.zeros(topo.num_sites, dtype=jnp.bool_)
                             blocked = blocked.at[topo.num_sites // 2].set(True)
-                    l, a = compile_slide(topo, slide_lookup, pi, np, blocked_cells=blocked)
+
+                    l, a = compile_slide(topo, slide_lookup, pi, np,
+                                         blocked_cells=blocked, directions=slide_dirs)
                     legal_fns.append(l)
                     apply_fns.append(a)
 
@@ -328,8 +338,12 @@ def compile(lud_text_or_path: str):
     # Compile effects
     effects = []
     if "custodial" in info.full_text.lower():
-        adj_lookup = None
-        effects.append(compile_custodial_capture(topo, adj_lookup, piece_idx, num_players=np))
+        # Detect direction for custodial: Orthogonal = [0,2,4,6] on 8-dir boards
+        cust_dirs = None
+        if topo.max_neighbors == 8 and "Orthogonal" in info.full_text:
+            cust_dirs = [0, 2, 4, 6]
+        effects.append(compile_custodial_capture(topo, None, piece_idx, num_players=np,
+                                                  directions=cust_dirs))
     if "surround" in info.full_text.lower():
         corner_only = "Corners" in info.full_text or "corners" in info.full_text
         effects.append(compile_surround_capture(topo, corner_only=corner_only, num_players=np))
