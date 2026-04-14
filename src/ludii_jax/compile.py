@@ -83,6 +83,17 @@ def compile(lud_text_or_path: str):
         legal_fn, apply_fn = compile_dice_move(topo, piece_idx, np)
         action_size = topo.num_sites
         start_fn = _build_start_fn(tree, info, topo)
+        # If no pieces placed, auto-place on first/last few cells
+        if "place" not in info.start_text and topo.num_sites >= 4:
+            half = topo.num_sites // 2
+            def dice_start(state):
+                board = state.board
+                # Place some pieces for each player
+                for i in range(min(2, half)):
+                    board = board.at[piece_idx, i].set(BOARD_DTYPE(0))
+                    board = board.at[piece_idx, topo.num_sites - 1 - i].set(BOARD_DTYPE(1))
+                return state._replace(board=board)
+            start_fn = dice_start
 
     else:
         # Determine movement types and build combined legal/apply
@@ -120,15 +131,24 @@ def compile(lud_text_or_path: str):
             legal_fn, apply_fn = compile_place(topo, piece_idx, np)
             action_size = topo.num_sites
 
-        # Check if game has both placement and movement phases
+        # Check if game has placement
         full_text = info.full_text
         has_placement = "move Add" in full_text or "handSite" in full_text or "Hand" in full_text
         has_movement = info.has_step or info.has_hop or info.has_slide
-        if has_placement and not has_movement:
-            legal_fn, apply_fn = compile_place(topo, piece_idx, np)
-            action_size = topo.num_sites
 
         start_fn = _build_start_fn(tree, info, topo)
+
+        # If game has placement AND movement but no start pieces, use placement
+        # (pieces need to be placed before they can move)
+        if has_placement and has_movement:
+            # Check if start_fn actually places pieces
+            test_board = jnp.ones((len(info.pieces) or 1, topo.num_sites), dtype=BOARD_DTYPE) * EMPTY
+            if not "place" in info.start_text:
+                legal_fn, apply_fn = compile_place(topo, piece_idx, np)
+                action_size = topo.num_sites
+        elif has_placement and not has_movement:
+            legal_fn, apply_fn = compile_place(topo, piece_idx, np)
+            action_size = topo.num_sites
 
     # Compile effects
     effects = []
@@ -208,6 +228,45 @@ def _build_start_fn(tree, info, topo):
         return name
 
     placements = []  # [(piece_idx, player, [cell_indices])]
+
+    # Region-based placement: (sites Bottom), (sites Top), etc.
+    for m in re.finditer(r'place\s+"([^"]+)"\s+(?:\(?sites\s+)(Bottom|Top|Left|Right)', full_text):
+        pname_raw = m.group(1)
+        region = m.group(2).lower()
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        if region in topo.regions:
+            indices = [i for i in range(n) if topo.regions[region][i]]
+        else:
+            # Approximate: bottom = first quarter, top = last quarter
+            quarter = max(n // 4, 1)
+            if region == "bottom":
+                indices = list(range(quarter))
+            elif region == "top":
+                indices = list(range(n - quarter, n))
+            elif region == "left":
+                indices = [i for i in range(n) if topo.site_coords[i][0] < topo.site_coords[n//2][0]]
+            elif region == "right":
+                indices = [i for i in range(n) if topo.site_coords[i][0] > topo.site_coords[n//2][0]]
+            else:
+                indices = []
+        if pname in piece_names and indices:
+            placements.append((piece_names.index(pname), player, indices))
+
+    # Expand pattern: (expand (sites Bottom/Top))
+    if not placements:
+        for m in re.finditer(r'place\s+"([^"]+)"\s+expand\s+sites\s+(Bottom|Top)', full_text):
+            pname_raw = m.group(1)
+            region = m.group(2).lower()
+            pname = resolve_name(pname_raw)
+            player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+            if region in topo.regions:
+                indices = [i for i in range(n) if topo.regions[region][i]]
+            else:
+                half = max(n // 4, 1)
+                indices = list(range(half)) if region == "bottom" else list(range(n - half, n))
+            if pname in piece_names and indices:
+                placements.append((piece_names.index(pname), player, indices))
 
     # Site-list pattern: place "Name" sites 2 3 4 ...
     for m in re.finditer(r'place\s+"([^"]+)"\s+(?:\(?sites\s+)?\{?(\d[\d\s]+)\}?', full_text):
