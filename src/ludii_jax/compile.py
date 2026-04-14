@@ -236,6 +236,44 @@ def _build_start_fn(tree, info, topo):
 
     placements = []  # [(piece_idx, player, [cell_indices])]
 
+    # Expand placement: place "Name" expand sites Left/Right/Bottom/Top
+    for m in re.finditer(r'place\s+"([^"]+)"\s+expand\s+(?:\(?sites\s+)?(Left|Right|Bottom|Top|Centre)', full_text):
+        pname_raw = m.group(1)
+        region = m.group(2).lower()
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        if region == "centre":
+            # Center + adjacent cells
+            cx = sum(x for x, _ in topo.site_coords) / n if n > 0 else 0
+            cy = sum(y for _, y in topo.site_coords) / n if n > 0 else 0
+            indices = sorted(range(n), key=lambda i: abs(topo.site_coords[i][0] - cx) + abs(topo.site_coords[i][1] - cy))[:n//3]
+        elif region in topo.regions:
+            base = [i for i in range(n) if topo.regions[region][i]]
+            # Expand: add neighbors
+            expanded = set(base)
+            for idx in base:
+                for d in range(topo.max_neighbors):
+                    nb = int(topo.adjacency[d, idx])
+                    if nb < n:
+                        expanded.add(nb)
+            indices = sorted(expanded)
+        else:
+            quarter = max(n // 4, 1)
+            indices = list(range(quarter)) if region in ("bottom", "left") else list(range(n - quarter, n))
+        if pname in piece_names and indices:
+            placements.append((piece_names.index(pname), player, indices))
+
+    # Phase-based placement: place "Name" sites Phase N
+    for m in re.finditer(r'place\s+"([^"]+)"\s+(?:intersection\s+)?sites\s+Phase\s+(\d+)', full_text):
+        pname_raw = m.group(1)
+        phase = int(m.group(2))
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        # Phase 0 = even cells, Phase 1 = odd cells (checkerboard)
+        indices = [i for i in range(n) if i % 2 == phase]
+        if pname in piece_names and indices:
+            placements.append((piece_names.index(pname), player, indices))
+
     # Region-based placement: (sites Bottom), (sites Top), etc.
     for m in re.finditer(r'place\s+"([^"]+)"\s+(?:\(?sites\s+)(Bottom|Top|Left|Right)', full_text):
         pname_raw = m.group(1)
