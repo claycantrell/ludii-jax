@@ -67,27 +67,28 @@ def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, n
     return apply_fn
 
 
-def compile_surround_capture(topology, corner_only=True, num_players=2):
-    """Surround capture: remove enemy in corner when all neighbors are friendly.
+def compile_surround_capture(topology, corner_only=True, num_players=2, directions=None):
+    """Surround capture: remove enemy when all specified neighbors are friendly/edge.
 
-    For Hasami Shogi: enemy in corner is captured when all its orthogonal
-    neighbors are friendly pieces or board edges.
+    For Hasami Shogi: enemy in corner captured when all orthogonal neighbors
+    are friendly pieces or board edges.
     """
-    import numpy as np
     n = topology.num_sites
+    max_nb = topology.max_neighbors
+    check_dirs = list(range(max_nb)) if directions is None else directions
 
-    # Find corner cells: minimum neighbor count on the board
+    # Find corner cells: cells with fewest orthogonal neighbors
     if corner_only:
-        nb_counts = [sum(1 for d in range(topology.max_neighbors) if int(topology.adjacency[d, i]) < n) for i in range(n)]
+        nb_counts = [sum(1 for d in check_dirs if int(topology.adjacency[d, i]) < n) for i in range(n)]
         min_nb = min(nb_counts) if nb_counts else 0
         corner_cells = [i for i in range(n) if nb_counts[i] == min_nb]
-        target_cells = jnp.array(corner_cells, dtype=ACTION_DTYPE) if corner_cells else jnp.array([], dtype=ACTION_DTYPE)
     else:
-        target_cells = jnp.arange(n, dtype=ACTION_DTYPE)
         corner_cells = list(range(n))
 
-    # Precompute neighbor lists per cell (padded)
-    max_nb = topology.max_neighbors
+    if not corner_cells:
+        return lambda state, op: state
+
+    # Precompute per-corner: which directions have real neighbors
     adj = jnp.array(topology.adjacency)
 
     def apply_fn(state, original_player):
@@ -95,13 +96,12 @@ def compile_surround_capture(topology, corner_only=True, num_players=2):
         enemy_mask = ((state.board != EMPTY) & (state.board != original_player)).any(axis=0)
 
         capture_mask = jnp.zeros(n, dtype=jnp.bool_)
-        for cell in corner_cells if corner_only else range(n):
+        for cell in corner_cells:
             is_enemy = enemy_mask[cell]
-            # Check all neighbors: each must be friendly or off-board
             all_blocked = jnp.bool_(True)
-            for d in range(max_nb):
+            for d in check_dirs:
                 nb = adj[d, cell]
-                nb_ok = (nb >= n) | mover_mask[nb.clip(0, n - 1)]  # off-board or friendly
+                nb_ok = (nb >= n) | mover_mask[nb.clip(0, n - 1)]
                 all_blocked = all_blocked & nb_ok
             capture_mask = capture_mask.at[cell].set(is_enemy & all_blocked)
 

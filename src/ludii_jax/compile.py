@@ -353,7 +353,9 @@ def compile(lud_text_or_path: str):
                                                   directions=cust_dirs))
     if "surround" in info.full_text.lower():
         corner_only = "Corners" in info.full_text or "corners" in info.full_text
-        effects.append(compile_surround_capture(topo, corner_only=corner_only, num_players=np))
+        surr_dirs = [0, 2, 4, 6] if topo.max_neighbors == 8 and "Orthogonal" in info.full_text else None
+        effects.append(compile_surround_capture(topo, corner_only=corner_only, num_players=np,
+                                                 directions=surr_dirs))
     if info.has_score:
         effects.append(compile_set_score(np))
     effects_fn = chain_effects(effects)
