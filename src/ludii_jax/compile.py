@@ -263,6 +263,32 @@ def _build_start_fn(tree, info, topo):
         if pname in piece_names and indices:
             placements.append((piece_names.index(pname), player, indices))
 
+    # Intersection pattern: place "Name" intersection (sites Phase N) (union (sites Top) (sites Bottom))
+    for m in re.finditer(r'place\s+"([^"]+)"\s+intersection\s+sites\s+Phase\s+(\d+)\s+.*?(Top|Bottom|Left|Right)', full_text):
+        pname_raw = m.group(1)
+        phase = int(m.group(2))
+        region = m.group(3).lower()
+        pname = resolve_name(pname_raw)
+        player = 0 if pname_raw.endswith("1") else 1 if pname_raw.endswith("2") else 0
+        phase_cells = set(i for i in range(n) if i % 2 == phase)
+        if region in topo.regions:
+            region_cells = set(i for i in range(n) if topo.regions[region][i])
+        else:
+            quarter = max(n // 4, 1)
+            region_cells = set(range(quarter)) if region == "bottom" else set(range(n - quarter, n))
+        # Also check for "union" — include multiple regions
+        for extra_region in re.findall(r'sites\s+(Top|Bottom|Left|Right)', full_text[m.start():m.start()+200]):
+            r = extra_region.lower()
+            if r in topo.regions:
+                region_cells |= set(i for i in range(n) if topo.regions[r][i])
+            elif r == "top":
+                region_cells |= set(range(n - max(n // 4, 1), n))
+            elif r == "bottom":
+                region_cells |= set(range(max(n // 4, 1)))
+        indices = sorted(phase_cells & region_cells)
+        if pname in piece_names and indices:
+            placements.append((piece_names.index(pname), player, indices))
+
     # Phase-based placement: place "Name" sites Phase N
     for m in re.finditer(r'place\s+"([^"]+)"\s+(?:intersection\s+)?sites\s+Phase\s+(\d+)', full_text):
         pname_raw = m.group(1)
@@ -361,10 +387,9 @@ def _build_start_fn(tree, info, topo):
                 placements.append((piece_names.index(pname), player, row_indices))
 
     if not placements:
-        # Fallback: auto-place for movement games
-        has_movement = info.has_step or info.has_hop or info.has_slide
-        has_place_in_start = "place" in full_text.split("play")[0] if "play" in full_text else False
-        if has_movement and has_place_in_start and n >= 4:
+        # Fallback: auto-place for movement games (even without explicit start placement)
+        has_movement = info.has_step or info.has_hop or info.has_slide or "forEach Piece" in info.full_text
+        if has_movement and n >= 4:
             # Place on first/last rows
             first_row = [i for i, (x, y) in enumerate(topo.site_coords) if y == min(yy for _, yy in topo.site_coords)]
             last_row = [i for i, (x, y) in enumerate(topo.site_coords) if y == max(yy for _, yy in topo.site_coords)]
