@@ -175,21 +175,34 @@ def compile(lud_text_or_path: str):
             piece_text = play_text
             for p in info.pieces:
                 piece_text += " " + info.piece_content.get(p.name, "")
+            # Direction indices for 8-dir grid (Ludii convention, row 0 = bottom):
+            # 0=N(up), 1=NE, 2=E(right), 3=SE, 4=S(down), 5=SW, 6=W(left), 7=NW
+            # Diagonal: NE=1, SE=3, SW=5, NW=7
+            # Orthogonal: N=0, E=2, S=4, W=6
+            # Forward (P1 moves N/up): N=0, NE=1, NW=7
+            # Forward diagonal: NE=1, NW=7
             step_dirs = None
             hop_dirs = None
-            if topo.max_neighbors == 8:  # square/rectangle board
+            if topo.max_neighbors == 8:
+                DIAG = [1, 3, 5, 7]
+                ORTHO = [0, 2, 4, 6]
+                FWD = [0, 1, 7]  # N, NE, NW (for P1)
+                FWD_DIAG = [1, 7]  # NE, NW
+
                 if "Diagonal" in piece_text and "Orthogonal" not in piece_text:
-                    step_dirs = [0, 2, 5, 7]  # UL, UR, DL, DR
-                    hop_dirs = [0, 2, 5, 7]
+                    step_dirs = DIAG
+                    hop_dirs = DIAG
                 elif "Orthogonal" in piece_text and "Diagonal" not in piece_text:
-                    step_dirs = [1, 3, 4, 6]  # U, L, R, D
-                    hop_dirs = [1, 3, 4, 6]
-                # Forward restriction narrows further
+                    step_dirs = ORTHO
+                    hop_dirs = ORTHO
+
                 if "Forward" in piece_text:
-                    if step_dirs:
-                        step_dirs = [d for d in step_dirs if d <= 2]  # only upper half
+                    if step_dirs and set(step_dirs) == set(DIAG):
+                        step_dirs = FWD_DIAG  # Forward diagonal only
+                    elif step_dirs:
+                        step_dirs = [d for d in step_dirs if d in FWD]
                     else:
-                        step_dirs = [0, 1, 2]  # UL, U, UR
+                        step_dirs = FWD
 
             for pi, p in enumerate(info.pieces if info.pieces else [type('P', (), {'name': 'token'})()]):
                 if info.has_step or (not info.has_hop and not info.has_slide and not info.has_leap):

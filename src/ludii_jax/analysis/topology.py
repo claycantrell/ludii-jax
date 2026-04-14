@@ -135,12 +135,18 @@ def build_topology(board_text: str) -> BoardTopology:
 # ============================================================
 
 def _grid(width: int, height: int) -> BoardTopology:
-    """Rectangular grid with 8 directions (ortho + diagonal)."""
+    """Rectangular grid with 8 directions (ortho + diagonal).
+
+    Matches Ludii cell numbering: row 0 = bottom, cell 0 = bottom-left.
+    idx = row * width + col, where row increases upward.
+    """
     n = width * height
+    # Coords for rendering: (col, row) where row 0 is at bottom
     coords = [(c, r) for r in range(height) for c in range(width)]
 
-    # 8 directions: N, NE, E, SE, S, SW, W, NW
-    offsets = [(-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]
+    # 8 directions: N(+row), NE, E(+col), SE, S(-row), SW, W(-col), NW
+    # In Ludii's bottom-up convention: N = increasing row index
+    offsets = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
     adj = np.full((8, n), n, dtype=np.int16)
 
     for idx in range(n):
@@ -150,9 +156,10 @@ def _grid(width: int, height: int) -> BoardTopology:
             if 0 <= nr < height and 0 <= nc < width:
                 adj[d, idx] = nr * width + nc
 
+    # Regions match Ludii: row 0 = bottom, row height-1 = top
     regions = {
-        "top": np.array([i < width for i in range(n)]),
-        "bottom": np.array([i >= n - width for i in range(n)]),
+        "bottom": np.array([i // width == 0 for i in range(n)]),
+        "top": np.array([i // width == height - 1 for i in range(n)]),
         "left": np.array([i % width == 0 for i in range(n)]),
         "right": np.array([i % width == width - 1 for i in range(n)]),
     }
