@@ -76,16 +76,15 @@ def compile_surround_capture(topology, corner_only=True, num_players=2):
     import numpy as np
     n = topology.num_sites
 
-    # Find corner cells
+    # Find corner cells: minimum neighbor count on the board
     if corner_only:
-        corner_cells = []
-        for i in range(n):
-            nb_count = sum(1 for d in range(topology.max_neighbors) if int(topology.adjacency[d, i]) < n)
-            if nb_count <= 2:  # corner = 2 or fewer neighbors
-                corner_cells.append(i)
+        nb_counts = [sum(1 for d in range(topology.max_neighbors) if int(topology.adjacency[d, i]) < n) for i in range(n)]
+        min_nb = min(nb_counts) if nb_counts else 0
+        corner_cells = [i for i in range(n) if nb_counts[i] == min_nb]
         target_cells = jnp.array(corner_cells, dtype=ACTION_DTYPE) if corner_cells else jnp.array([], dtype=ACTION_DTYPE)
     else:
         target_cells = jnp.arange(n, dtype=ACTION_DTYPE)
+        corner_cells = list(range(n))
 
     # Precompute neighbor lists per cell (padded)
     max_nb = topology.max_neighbors
