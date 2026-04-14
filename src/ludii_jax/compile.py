@@ -367,12 +367,30 @@ def compile(lud_text_or_path: str):
         end_text = info.full_text  # fallback
 
     if "is Line" in end_text:
+        # Detect region exclusion: "not is In to sites Mover"
+        exclude_regions = None
+        if "not" in end_text and "sites Mover" in end_text:
+            # Build per-player starting region masks
+            import numpy as np_cpu
+            excl = np_cpu.zeros((np, topo.num_sites), dtype=bool)
+            for pi in range(np):
+                region_key = f"p{pi+1}"
+                if region_key in topo.regions:
+                    excl[pi] = topo.regions[region_key]
+                elif pi == 0 and "bottom" in topo.regions:
+                    excl[pi] = topo.regions["bottom"]
+                elif pi == 1 and "top" in topo.regions:
+                    excl[pi] = topo.regions["top"]
+            if excl.any():
+                exclude_regions = jnp.array(excl)
+
         for m in re.finditer(r'is Line (\d+).*?result (\w+) (\w+)', end_text):
             n_line = int(m.group(1))
             outcome = m.group(3)
             line_idx = build_line_indices(topo, n_line)
             if outcome == "Win":
-                end_fns.append(compile_line_win(line_idx, piece_idx, np))
+                end_fns.append(compile_line_win(line_idx, piece_idx, np,
+                                                exclude_regions=exclude_regions))
             elif outcome == "Loss":
                 end_fns.append(compile_line_loss(line_idx, piece_idx, np))
 

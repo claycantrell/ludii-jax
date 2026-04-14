@@ -10,14 +10,23 @@ import jax.numpy as jnp
 from ..runtime.state import BOARD_DTYPE, EMPTY
 
 
-def compile_line_win(line_indices, piece_idx, num_players):
-    """Win by forming a line of N."""
+def compile_line_win(line_indices, piece_idx, num_players, exclude_regions=None):
+    """Win by forming a line of N.
+
+    exclude_regions: optional (num_players, n) bool mask. If set, lines entirely
+    within the current player's region don't count (e.g. starting rows).
+    """
     if line_indices.shape[0] == 0:
         return lambda state: (EMPTY * jnp.ones(num_players, jnp.int8), False)
 
     def end_fn(state):
         occupied = (state.board[piece_idx] == state.current_player).astype(BOARD_DTYPE)
         line_matches = (occupied[line_indices] == 1).all(axis=1)
+        if exclude_regions is not None:
+            # Exclude lines where ALL cells are in the mover's starting region
+            player_region = exclude_regions[state.current_player]
+            all_in_region = player_region[line_indices].all(axis=1)
+            line_matches = line_matches & ~all_in_region
         won = line_matches.any()
         winners = jnp.where(won,
                             jnp.zeros(num_players, jnp.int8).at[state.current_player].set(1),
