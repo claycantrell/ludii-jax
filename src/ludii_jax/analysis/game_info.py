@@ -188,12 +188,17 @@ def _extract_equipment(tree, info: GameInfo):
             info.has_sow = True
             # Parse mancala board dimensions
             nums = [int(t) for t in content_str.split() if t.isdigit()]
+            has_stores = "store:None" not in content_str and "store:none" not in content_str
+            store_count = 2 if has_stores else 0
             if len(nums) >= 2:
-                board_text = f"rectangle {nums[0]} {nums[1]}"
+                rows, cols = nums[0], nums[1]
+                total_cells = rows * cols + store_count
+                # Model as rectangle with extra columns for stores
+                board_text = f"rectangle {cols + (store_count // rows if rows > 0 else 0)} {rows}"
             elif nums:
-                board_text = f"rectangle 2 {nums[0]}"
+                board_text = f"rectangle {nums[0] + store_count} 2"
             else:
-                board_text = "rectangle 2 6"
+                board_text = f"rectangle {6 + store_count} 2"
         elif type_str == "hand":
             info.has_hand = True
         elif type_str == "piece":

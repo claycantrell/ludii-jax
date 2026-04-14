@@ -56,8 +56,10 @@ def build_topology(board_text: str) -> BoardTopology:
 
     if shape in ("hex", "hexagon"):
         args = [int(t) for t in tokens[1:] if t.isdigit()]
+        is_diamond = "diamond" in board_text.lower()
+        if is_diamond and args:
+            return _hex_diamond(args[0])
         if len(args) >= 3:
-            # Variable-width: {3 4 3 4 3}
             return _hex_variable([int(a) for a in args])
         if args:
             return _hex_regular(args[0])
@@ -90,8 +92,23 @@ def build_topology(board_text: str) -> BoardTopology:
         n = args[0] if args else 20
         return _spiral(n)
 
+    # Wrapper operations (rotate, scale): extract the inner board
+    if shape in ("rotate", "scale"):
+        # Find the inner board definition and recurse
+        inner = board_text
+        for prefix in ["rotate", "scale"]:
+            if inner.lower().startswith(prefix):
+                # Skip the operation keyword and any numeric args
+                rest = inner[len(prefix):].strip()
+                while rest and (rest[0].isdigit() or rest[0] in '.-'):
+                    rest = rest[1:].strip()
+                inner = rest
+                break
+        if inner != board_text:
+            return build_topology(inner)
+
     # Composite operations: merge, add, remove, shift, etc.
-    if shape in ("merge", "add", "remove", "shift", "scale", "rotate",
+    if shape in ("merge", "add", "remove", "shift",
                  "union", "keep", "trim", "skew", "dual", "splitcrossings",
                  "renumber", "subdivide", "makefaces", "hole", "intersect",
                  "less"):
@@ -143,12 +160,10 @@ def _grid(width: int, height: int) -> BoardTopology:
     return BoardTopology(n, adj, 8, coords, regions)
 
 
-def _hex_regular(diameter: int) -> BoardTopology:
-    """Regular hexagonal board with given diameter (must be odd)."""
-    if diameter % 2 == 0:
-        diameter += 1
-
-    radius = diameter // 2
+def _hex_regular(side_length: int) -> BoardTopology:
+    """Regular hexagonal board. Ludii hex N = side length N, total = 3N²-3N+1."""
+    n_cells = 3 * side_length * side_length - 3 * side_length + 1
+    radius = side_length - 1
     coords = []
     idx_map = {}
 
@@ -156,12 +171,12 @@ def _hex_regular(diameter: int) -> BoardTopology:
         for q in range(-radius, radius + 1):
             if abs(r + q) <= radius:
                 idx_map[(q, r)] = len(coords)
-                # Pixel coords for rendering
                 x = q + r * 0.5
                 y = r * math.sqrt(3) / 2
                 coords.append((x, y))
 
     n = len(coords)
+    assert n == n_cells, f"Hex {side_length}: expected {n_cells}, got {n}"
     # 6 hex directions: E, NE, NW, W, SW, SE
     hex_offsets = [(1, 0), (0, -1), (-1, -1), (-1, 0), (0, 1), (1, 1)]
     adj = np.full((6, n), n, dtype=np.int16)
