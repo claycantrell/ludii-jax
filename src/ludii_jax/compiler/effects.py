@@ -54,10 +54,13 @@ def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, n
         mover_mask = (state.board == original_player).any(axis=0)
         enemy_mask = ((state.board != EMPTY) & (state.board != original_player)).any(axis=0)
 
-        # Vectorized check: both endpoints friendly, middle is enemy
-        is_custodial = mover_mask[ep1] & mover_mask[ep2] & enemy_mask[mid]
+        # Only check triples radiating from the last-moved-to cell
+        last_to = state.previous_actions[num_players]  # global last-to
+        from_last = (ep1 == last_to) | (ep2 == last_to)
 
-        # Scatter captures: for each triggered triple, mark the middle cell
+        # Vectorized check: both endpoints friendly, middle is enemy, involves last move
+        is_custodial = mover_mask[ep1] & mover_mask[ep2] & enemy_mask[mid] & from_last
+
         capture_mask = jnp.zeros(n, dtype=jnp.bool_)
         capture_mask = capture_mask.at[mid].set(capture_mask[mid] | is_custodial)
 

@@ -85,12 +85,12 @@ def validate_trace(trace_path, games_dir):
         if env.num_actions == env.num_sites:
             # Placement: action = destination
             jax_action = action_to
+        elif action_from >= env.num_sites or action_from < 0:
+            # Hand placement (from is off-board hand index): action = destination
+            jax_action = action_to
         else:
             # Movement: action = from * board_size + to
-            if action_from >= 0:
-                jax_action = action_from * env.num_sites + action_to
-            else:
-                jax_action = action_to
+            jax_action = action_from * env.num_sites + action_to
 
         # Check action is legal in JAX
         if jax_action < len(state.legal_action_mask):

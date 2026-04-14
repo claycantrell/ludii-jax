@@ -35,6 +35,7 @@ from .compiler.conditions import (
 )
 from .compiler.compose import compose_game, make_alternating_player_fn
 
+import jax
 import jax.numpy as jnp
 
 
@@ -72,6 +73,7 @@ def compile(lud_text_or_path: str):
     # Determine action size and compile movement
     piece_idx = 0  # default piece
     piece_names = [p.name for p in info.pieces] if info.pieces else ["token"]
+    mechanic = None  # set by mechanic detection below
 
     if info.is_mancala:
         # Detect stores-in-track: Kalah-style has "moveAgain" tied to store landing
@@ -130,10 +132,13 @@ def compile(lud_text_or_path: str):
                         break
 
         # Classify the PRIMARY mechanic from the play section structure
-        if "move Add" in play_text or "move Claim" in play_text:
+        has_phases = "phases" in play_text.lower()
+        if has_phases and "handSite" in play_text and ("forEach Piece" in play_text or "move Step" in play_text):
+            mechanic = "MULTI_PHASE"  # placement → movement
+        elif "move Add" in play_text or "move Claim" in play_text:
             mechanic = "PLACE"
         elif "satisfy" in play_text:
-            mechanic = "PLACE"  # puzzle = placement
+            mechanic = "PLACE"
         elif "move Remove" in play_text and "forEach Piece" not in play_text:
             mechanic = "REMOVE"
         elif "move Select" in play_text and "forEach Piece" not in play_text and "move Step" not in play_text:
@@ -147,14 +152,56 @@ def compile(lud_text_or_path: str):
         elif "move Step" in play_text or "move Hop" in play_text or "move Slide" in play_text:
             mechanic = "MOVEMENT"
         else:
-            mechanic = "PLACE"  # default: placement
+            mechanic = "PLACE"
 
         start_fn = _build_start_fn(tree, info, topo)
 
         # ============================================================
         # Compile based on structural mechanic
         # ============================================================
-        if mechanic == "PLACE":
+        if mechanic == "MULTI_PHASE":
+            # Phase 0: placement, Phase 1: movement (step along edges)
+            place_legal, place_apply = compile_place(topo, piece_idx, np)
+            # Detect hand count (pieces per player to place)
+            hand_count = 9  # default
+            m_count = re.search(r'count:(\d+)', info.full_text)
+            if m_count:
+                hand_count = int(m_count.group(1))
+            total_placements = hand_count * np
+
+            # Step movement for phase 1
+            step_legal, step_apply = compile_step(topo, slide_lookup, piece_idx, np)
+            n_sites = topo.num_sites
+            move_action_size = n_sites * n_sites
+
+            # Pad placement actions to match movement action size
+            def phase0_legal(state):
+                return jnp.concatenate([place_legal(state),
+                                        jnp.zeros(move_action_size - n_sites, dtype=BOARD_DTYPE)])
+            def phase0_apply(state, action):
+                return place_apply(state, jnp.minimum(action, n_sites - 1))
+            def phase1_legal(state):
+                return step_legal(state).flatten().astype(BOARD_DTYPE)
+            def phase1_apply(state, action):
+                return step_apply(state, action)
+
+            def multi_legal(state):
+                return jax.lax.switch(state.phase_idx, [phase0_legal, phase1_legal], state)
+            def multi_apply(state, action):
+                return jax.lax.switch(state.phase_idx, [phase0_apply, phase1_apply], state, action)
+
+            legal_fn = multi_legal
+            apply_fn = multi_apply
+            action_size = move_action_size
+
+            # Phase transition: after all pieces placed, switch to movement
+            _total = total_placements
+            def phase_transition(state, action):
+                piece_count = (state.board != EMPTY).any(axis=0).sum()
+                new_phase = jax.lax.select(piece_count >= _total, BOARD_DTYPE(1), state.phase_idx)
+                return state._replace(phase_idx=new_phase)
+
+        elif mechanic == "PLACE":
             legal_fn, apply_fn = compile_place(topo, piece_idx, np)
             action_size = topo.num_sites
 
@@ -423,6 +470,11 @@ def compile(lud_text_or_path: str):
     # Compose
     next_player_fn = make_alternating_player_fn(np)
 
+    # Phase transition function (for multi-phase games)
+    addl_info_fn = None
+    if mechanic == "MULTI_PHASE":
+        addl_info_fn = phase_transition
+
     game_rules = compose_game(
         action_size=action_size,
         legal_fn=legal_fn,
@@ -433,6 +485,8 @@ def compile(lud_text_or_path: str):
         start_fn=start_fn,
         num_players=np,
     )
+    if addl_info_fn:
+        game_rules['addl_info_fn'] = addl_info_fn
 
     return Environment(game_rules, GameState, info)
 
