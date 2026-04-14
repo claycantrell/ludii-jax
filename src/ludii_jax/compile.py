@@ -154,7 +154,20 @@ def compile(lud_text_or_path: str):
         # 3. Hand-based games (pieces start in hand, not on board)
         is_hand_game = "Hand" in info.full_text and "handSite" in info.full_text
         board_has_start_pieces = "place" in info.start_text and '"Hand"' not in info.start_text
-        if has_placement and not has_movement:
+        # Check if play is primarily Select/Remove (pick-a-cell, not movement)
+        play_is_select = any(kw in play_section for kw in ["move Select", "move Remove"]) and \
+                          not any(kw in play_section for kw in ["move Step", "move Hop", "move Slide"])
+        if play_is_select:
+            # Select/Remove games: action = pick a cell (occupied)
+            def select_legal(state):
+                return (state.board != EMPTY).any(axis=0).astype(BOARD_DTYPE)
+            def select_apply(state, action):
+                board = state.board.at[:, action].set(EMPTY)
+                pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(action)).at[np].set(ACTION_DTYPE(action))
+                return state._replace(board=board, previous_actions=pa)
+            legal_fn, apply_fn = select_legal, select_apply
+            action_size = topo.num_sites
+        elif has_placement and not has_movement:
             legal_fn, apply_fn = compile_place(topo, piece_idx, np)
             action_size = topo.num_sites
         elif has_placement and has_movement and (not board_has_start_pieces or is_hand_game):
