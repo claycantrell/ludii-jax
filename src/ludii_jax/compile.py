@@ -149,11 +149,14 @@ def compile(lud_text_or_path: str):
 
         # Route to placement if:
         # 1. Play section uses Add/Claim/satisfy/handSite (pure placement)
-        # 2. Play section has both placement and movement but no start pieces
+        # 2. Play section has both placement and movement but no board pieces at start
+        # 3. Hand-based games (pieces start in hand, not on board)
+        is_hand_game = "Hand" in info.full_text and "handSite" in info.full_text
+        board_has_start_pieces = "place" in info.start_text and '"Hand"' not in info.start_text
         if has_placement and not has_movement:
             legal_fn, apply_fn = compile_place(topo, piece_idx, np)
             action_size = topo.num_sites
-        elif has_placement and has_movement and "place" not in info.start_text:
+        elif has_placement and has_movement and (not board_has_start_pieces or is_hand_game):
             legal_fn, apply_fn = compile_place(topo, piece_idx, np)
             action_size = topo.num_sites
 
