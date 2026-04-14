@@ -465,26 +465,45 @@ def compile(lud_text_or_path: str):
 
     if "is Connected" in end_text:
         # Parse connected side sets from end text
-        # Common patterns: Hex (Top/Bottom), Y (3 sides), Cross (3 sides)
+        import math as _math
         side_map = {}
+        n_sites = topo.num_sites
+        cx = sum(x for x, _ in topo.site_coords) / n_sites
+        cy = sum(y for _, y in topo.site_coords) / n_sites
+        all_y = [y for _, y in topo.site_coords]
+        all_x = [x for x, _ in topo.site_coords]
+        min_y, max_y = min(all_y), max(all_y)
+        min_x, max_x = min(all_x), max(all_x)
+
+        # Find edge cells (fewer neighbors than internal cells)
+        nb_counts = [sum(1 for d in range(topo.max_neighbors) if int(topo.adjacency[d, i]) < n_sites) for i in range(n_sites)]
+        max_nbs = max(nb_counts)
+        edge_cells = [i for i in range(n_sites) if nb_counts[i] < max_nbs]
+
+        # Classify edge cells into sides by angle from center
+        # Hex sides: S(-120 to -60), SE(-60 to 0), NE(0 to 60), N(60 to 120), NW(120 to 180), SW(-180 to -120)
+        # Grid sides: S(bottom), N(top), E(right), W(left)
+        angle_ranges = {
+            "S": (-120, -60), "SE": (-60, 0), "NE": (0, 60),
+            "N": (60, 120), "NW": (120, 180), "SW": (-180, -120),
+        }
+        eps = 0.01
         for side_name in ["N", "S", "E", "W", "NE", "NW", "SE", "SW", "Top", "Bottom"]:
             cells = []
-            for i in range(topo.num_sites):
-                x, y = topo.site_coords[i]
-                # Assign cells to sides based on position
-                all_x = [xx for xx, _ in topo.site_coords]
-                all_y = [yy for _, yy in topo.site_coords]
-                min_x, max_x = min(all_x), max(all_x)
-                min_y, max_y = min(all_y), max(all_y)
-                eps = 0.01
-                if side_name in ("N", "Top") and abs(y - max_y) < eps: cells.append(i)
-                elif side_name in ("S", "Bottom") and abs(y - min_y) < eps: cells.append(i)
-                elif side_name == "E" and abs(x - max_x) < eps: cells.append(i)
-                elif side_name == "W" and abs(x - min_x) < eps: cells.append(i)
-                elif side_name == "NE" and abs(x - max_x) < eps + abs(y - max_y) < 2*eps: cells.append(i)
-                elif side_name == "NW" and abs(x - min_x) < eps + abs(y - max_y) < 2*eps: cells.append(i)
-                elif side_name == "SE" and abs(x - max_x) < eps + abs(y - min_y) < 2*eps: cells.append(i)
-                elif side_name == "SW" and abs(x - min_x) < eps + abs(y - min_y) < 2*eps: cells.append(i)
+            if topo.max_neighbors == 6 and side_name in angle_ranges:
+                lo, hi = angle_ranges[side_name]
+                for i in edge_cells:
+                    x, y = topo.site_coords[i]
+                    angle = _math.atan2(y - cy, x - cx) * 180 / _math.pi
+                    if lo <= angle < hi or (side_name == "SW" and angle >= 180 - eps):
+                        cells.append(i)
+            else:
+                for i in range(n_sites):
+                    x, y = topo.site_coords[i]
+                    if side_name in ("N", "Top") and abs(y - max_y) < eps: cells.append(i)
+                    elif side_name in ("S", "Bottom") and abs(y - min_y) < eps: cells.append(i)
+                    elif side_name == "E" and abs(x - max_x) < eps: cells.append(i)
+                    elif side_name == "W" and abs(x - min_x) < eps: cells.append(i)
             if cells:
                 side_map[side_name] = set(cells)
 
