@@ -31,7 +31,8 @@ from .compiler.effects import (
 from .compiler.conditions import (
     compile_line_win, compile_line_loss, compile_no_moves_loss,
     compile_captured_all, compile_full_board_draw,
-    compile_full_board_by_score, combine_end_conditions,
+    compile_full_board_by_score, compile_connected_win,
+    combine_end_conditions,
 )
 from .compiler.compose import compose_game, make_alternating_player_fn
 
@@ -461,6 +462,55 @@ def compile(lud_text_or_path: str):
 
     if "no Pieces" in end_text or "count Pieces" in end_text:
         end_fns.append(compile_captured_all(np))
+
+    if "is Connected" in end_text:
+        # Parse connected side sets from end text
+        # Common patterns: Hex (Top/Bottom), Y (3 sides), Cross (3 sides)
+        side_map = {}
+        for side_name in ["N", "S", "E", "W", "NE", "NW", "SE", "SW", "Top", "Bottom"]:
+            cells = []
+            for i in range(topo.num_sites):
+                x, y = topo.site_coords[i]
+                # Assign cells to sides based on position
+                all_x = [xx for xx, _ in topo.site_coords]
+                all_y = [yy for _, yy in topo.site_coords]
+                min_x, max_x = min(all_x), max(all_x)
+                min_y, max_y = min(all_y), max(all_y)
+                eps = 0.01
+                if side_name in ("N", "Top") and abs(y - max_y) < eps: cells.append(i)
+                elif side_name in ("S", "Bottom") and abs(y - min_y) < eps: cells.append(i)
+                elif side_name == "E" and abs(x - max_x) < eps: cells.append(i)
+                elif side_name == "W" and abs(x - min_x) < eps: cells.append(i)
+                elif side_name == "NE" and abs(x - max_x) < eps + abs(y - max_y) < 2*eps: cells.append(i)
+                elif side_name == "NW" and abs(x - min_x) < eps + abs(y - max_y) < 2*eps: cells.append(i)
+                elif side_name == "SE" and abs(x - max_x) < eps + abs(y - min_y) < 2*eps: cells.append(i)
+                elif side_name == "SW" and abs(x - min_x) < eps + abs(y - min_y) < 2*eps: cells.append(i)
+            if cells:
+                side_map[side_name] = set(cells)
+
+        # Extract side pairs from end text
+        side_pairs = []
+        for m_conn in re.finditer(r'is Connected.*?result (\w+) (\w+)', end_text):
+            # Find sides mentioned between "is Connected" and "result"
+            snippet = end_text[m_conn.start():m_conn.end()]
+            sides_found = []
+            for sn in ["NE", "NW", "SE", "SW", "N", "S", "E", "W", "Top", "Bottom"]:
+                if f"Side {sn}" in snippet or f"sites {sn}" in snippet.replace("Side ", ""):
+                    if sn in side_map:
+                        sides_found.append(side_map[sn])
+            # Create pairs: connect first to each subsequent
+            if len(sides_found) >= 2:
+                side_pairs.append((sides_found[0], sides_found[-1]))
+
+        # Default: for hex boards, connect opposite sides
+        if not side_pairs and topo.max_neighbors == 6:
+            if "Top" in side_map and "Bottom" in side_map:
+                side_pairs.append((side_map["Top"], side_map["Bottom"]))
+            elif "N" in side_map and "S" in side_map:
+                side_pairs.append((side_map["N"], side_map["S"]))
+
+        if side_pairs:
+            end_fns.append(compile_connected_win(topo, side_pairs, piece_idx, np))
 
     if "is Full" in end_text:
         if "by_score" in end_text.lower() or "by Score" in end_text:

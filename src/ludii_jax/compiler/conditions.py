@@ -105,6 +105,57 @@ def compile_full_board_by_score(num_players):
     return end_fn
 
 
+def compile_connected_win(topology, side_sets, piece_idx, num_players):
+    """Win by connecting specified side sets through mover's pieces.
+
+    side_sets: list of (set_a, set_b) pairs. Win if any pair is connected.
+    Uses iterative flood-fill with jax.lax.fori_loop for efficient tracing.
+    """
+    import numpy as np_cpu
+    n = topology.num_sites
+    adj = jnp.array(topology.adjacency)
+    max_nb = topology.max_neighbors
+    max_iters = min(n, 20)
+
+    # Precompute neighbor lookup as flat array: for each cell, list of valid neighbors
+    # Shape: (n, max_nb) padded with n for invalid
+    nb_table = jnp.array(topology.adjacency.T.clip(0, n), dtype=jnp.int32)  # (n, max_nb)
+    nb_valid = jnp.array((topology.adjacency < n).T, dtype=jnp.bool_)  # (n, max_nb)
+
+    pairs = []
+    for set_a, set_b in side_sets:
+        mask_a = jnp.zeros(n, dtype=jnp.bool_)
+        mask_b = jnp.zeros(n, dtype=jnp.bool_)
+        for c in set_a: mask_a = mask_a.at[c].set(True)
+        for c in set_b: mask_b = mask_b.at[c].set(True)
+        pairs.append((mask_a, mask_b))
+
+    def _flood_fill(occupied, seed):
+        """BFS flood fill from seed through occupied cells."""
+        def step(_, visited):
+            # For each visited cell, mark its neighbors as reachable
+            expanded = visited[jnp.arange(n), jnp.newaxis] & nb_valid  # (n, max_nb)
+            nb_reached = jnp.zeros(n, dtype=jnp.bool_)
+            # Scatter: for each cell's neighbors, OR into nb_reached
+            nb_reached = nb_reached.at[nb_table.flatten()].max(
+                expanded.flatten().astype(jnp.int8)).astype(jnp.bool_)
+            return visited | (nb_reached & occupied)
+        return jax.lax.fori_loop(0, max_iters, step, seed & occupied)
+
+    def end_fn(state):
+        occupied = (state.board[piece_idx] == state.current_player)
+        won = jnp.bool_(False)
+        for mask_a, mask_b in pairs:
+            reached = _flood_fill(occupied, mask_a)
+            won = won | (reached & mask_b).any()
+        winners = jnp.where(won,
+                            jnp.zeros(num_players, jnp.int8).at[state.current_player].set(1),
+                            EMPTY * jnp.ones(num_players, jnp.int8))
+        return winners, won
+
+    return end_fn
+
+
 def combine_end_conditions(end_fns, num_players):
     """Combine multiple end conditions. First one that fires wins."""
     if not end_fns:
