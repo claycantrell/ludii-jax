@@ -214,21 +214,78 @@ def compile(lud_text_or_path: str):
             def phase1_apply(state, action):
                 return step_apply(state, action)
 
-            def multi_legal(state):
-                return jax.lax.switch(state.phase_idx, [phase0_legal, phase1_legal], state)
-            def multi_apply(state, action):
-                return jax.lax.switch(state.phase_idx, [phase0_apply, phase1_apply], state, action)
+            # Phase 2: mill removal (if game has "is Line" in play section)
+            has_mill = "is Line" in play_text and "remove" in play_text.lower()
+            if has_mill:
+                mill_n = 3  # default mill size
+                m_mill = re.search(r'is Line (\d+)', play_text)
+                if m_mill: mill_n = int(m_mill.group(1))
+                mill_line_idx = build_line_indices(topo, mill_n)
+
+                def phase2_legal(state):
+                    """During mill removal: select any opponent piece to remove."""
+                    opponent = (state.current_player + 1) % np
+                    removable = (state.board[piece_idx] == opponent).astype(BOARD_DTYPE)
+                    return jnp.concatenate([removable,
+                                            jnp.zeros(move_action_size - n_sites, dtype=BOARD_DTYPE)])
+                def phase2_apply(state, action):
+                    """Remove selected opponent piece, return to previous phase."""
+                    cell = jnp.minimum(action, n_sites - 1)
+                    board = state.board.at[:, cell].set(EMPTY)
+                    # Return to movement phase (phase 1) or placement (phase 0)
+                    piece_count = (board != EMPTY).any(axis=0).sum()
+                    prev_phase = jax.lax.select(piece_count >= _total, BOARD_DTYPE(1), BOARD_DTYPE(0))
+                    return state._replace(board=board, phase_idx=prev_phase)
+
+                def multi_legal(state):
+                    return jax.lax.switch(state.phase_idx.clip(0, 2),
+                                          [phase0_legal, phase1_legal, phase2_legal], state)
+                def multi_apply(state, action):
+                    return jax.lax.switch(state.phase_idx.clip(0, 2),
+                                          [phase0_apply, phase1_apply, phase2_apply], state, action)
+            else:
+                def multi_legal(state):
+                    return jax.lax.switch(state.phase_idx, [phase0_legal, phase1_legal], state)
+                def multi_apply(state, action):
+                    return jax.lax.switch(state.phase_idx, [phase0_apply, phase1_apply], state, action)
 
             legal_fn = multi_legal
             apply_fn = multi_apply
             action_size = move_action_size
 
-            # Phase transition: after all pieces placed, switch to movement
+            # Phase transition + mill detection
             _total = total_placements
-            def phase_transition(state, action):
-                piece_count = (state.board != EMPTY).any(axis=0).sum()
-                new_phase = jax.lax.select(piece_count >= _total, BOARD_DTYPE(1), state.phase_idx)
-                return state._replace(phase_idx=new_phase)
+            if has_mill:
+                _mill_lines = mill_line_idx
+                def phase_transition(state, action):
+                    piece_count = (state.board != EMPTY).any(axis=0).sum()
+                    base_phase = jax.lax.select(piece_count >= _total, BOARD_DTYPE(1), BOARD_DTYPE(0))
+
+                    # Check if mover formed a NEW mill involving the last-moved cell
+                    # Only during movement phase (phase 1), not placement
+                    mover = (state.current_player + np - 1) % np
+                    last_to = state.previous_actions[np]
+                    mover_cells = (state.board[piece_idx] == mover)
+                    involves_last = (_mill_lines == last_to).any(axis=1)
+                    has_mill_now = ((mover_cells[_mill_lines]).all(axis=1) & involves_last).any()
+                    in_movement = (base_phase >= 1)  # only check during movement
+
+                    # If mill formed and not already in removal phase, go to phase 2
+                    in_removal = (state.phase_idx == 2)
+                    new_phase = jax.lax.select(
+                        has_mill_now & in_movement & ~in_removal, BOARD_DTYPE(2), base_phase)
+
+                    # If entering removal phase, don't advance player (moveAgain)
+                    entering_removal = (new_phase == 2) & ~in_removal
+                    adj = jax.lax.select(entering_removal, BOARD_DTYPE(-1), BOARD_DTYPE(0))
+
+                    return state._replace(phase_idx=new_phase,
+                                          phase_step_count=state.phase_step_count + adj)
+            else:
+                def phase_transition(state, action):
+                    piece_count = (state.board != EMPTY).any(axis=0).sum()
+                    new_phase = jax.lax.select(piece_count >= _total, BOARD_DTYPE(1), state.phase_idx)
+                    return state._replace(phase_idx=new_phase)
 
         elif mechanic == "PLACE":
             legal_fn, apply_fn = compile_place(topo, piece_idx, np)

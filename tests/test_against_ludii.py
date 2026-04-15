@@ -98,10 +98,12 @@ def validate_trace(trace_path, games_dir):
 
         # Find the corresponding JAX action
         if env.num_actions == env.num_sites:
-            # Placement: action = destination
             jax_action = action_to
         elif action_from >= env.num_sites or action_from < 0:
-            # Hand placement (from is off-board hand index): action = destination
+            # Hand placement (from is off-board hand index)
+            jax_action = action_to
+        elif action_from == action_to:
+            # Removal action (select cell to remove): action = cell index
             jax_action = action_to
         else:
             # Movement: action = from * board_size + to
