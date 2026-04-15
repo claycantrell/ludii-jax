@@ -12,6 +12,7 @@ Usage: python test_against_ludii.py [ludii_games_dir]
 
 import json
 import os
+import signal
 import sys
 import glob
 
@@ -53,11 +54,25 @@ def validate_trace(trace_path, games_dir):
         lud = f.read()
 
     try:
+        signal.signal(signal.SIGALRM, lambda s, f: (_ for _ in ()).throw(TimeoutError()))
+        signal.alarm(60)
         env = compile(lud)
+    except TimeoutError:
+        signal.alarm(0)
+        return "COMPILE_FAIL", "timeout"
     except Exception as e:
+        signal.alarm(0)
         return "COMPILE_FAIL", str(e)[:60]
 
-    state = env.init(jax.random.PRNGKey(42))
+    try:
+        state = env.init(jax.random.PRNGKey(42))
+        signal.alarm(0)
+    except TimeoutError:
+        signal.alarm(0)
+        return "COMPILE_FAIL", "init timeout"
+    except Exception as e:
+        signal.alarm(0)
+        return "COMPILE_FAIL", str(e)[:60]
     errors = []
 
     # Check board size matches
