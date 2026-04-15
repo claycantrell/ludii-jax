@@ -234,8 +234,8 @@ def compile(lud_text_or_path: str):
                     board = state.board.at[:, cell].set(EMPTY)
                     # Return to movement phase (phase 1) or placement (phase 0)
                     piece_count = (board != EMPTY).any(axis=0).sum()
-                    prev_phase = jax.lax.select(piece_count >= _total, BOARD_DTYPE(1), BOARD_DTYPE(0))
-                    return state._replace(board=board, phase_idx=prev_phase)
+                    # Always return to movement phase (1) after removal
+                    return state._replace(board=board, phase_idx=BOARD_DTYPE(1))
 
                 def multi_legal(state):
                     return jax.lax.switch(state.phase_idx.clip(0, 2),
@@ -275,12 +275,15 @@ def compile(lud_text_or_path: str):
                     new_phase = jax.lax.select(
                         has_mill_now & in_movement & ~in_removal, BOARD_DTYPE(2), base_phase)
 
-                    # If entering removal phase, revert to mover (who formed the mill)
+                    # If entering removal phase, revert to mover and undo step count
                     entering_removal = (new_phase == 2) & ~in_removal
                     new_player = jax.lax.select(entering_removal,
                                                 BOARD_DTYPE(mover), state.current_player)
+                    # Decrement phase_step_count to keep player alternation in sync
+                    adj = jax.lax.select(entering_removal, BOARD_DTYPE(-1), BOARD_DTYPE(0))
 
-                    return state._replace(phase_idx=new_phase, current_player=new_player)
+                    return state._replace(phase_idx=new_phase, current_player=new_player,
+                                          phase_step_count=state.phase_step_count + adj)
             else:
                 def phase_transition(state, action):
                     piece_count = (state.board != EMPTY).any(axis=0).sum()
