@@ -115,8 +115,25 @@ def build_topology(board_text: str) -> BoardTopology:
         if inner != board_text:
             return build_topology(inner)
 
-    # Composite operations: merge, add, remove, shift, etc.
-    if shape in ("merge", "add", "remove", "shift",
+    # Remove: build inner board, then remove specific cells
+    if shape == "remove":
+        # Extract cells to remove: cells:{N N N ...}
+        cells_match = re.search(r'cells:\{([^}]+)\}', board_text)
+        # Find inner board spec
+        inner = board_text[len("remove"):].strip()
+        # Strip cells:{...} from inner
+        if cells_match:
+            inner = inner[:cells_match.start() - len("remove") - 1].strip()
+            remove_cells = set(int(x) for x in re.findall(r'\d+', cells_match.group(1)))
+        else:
+            remove_cells = set()
+        inner_topo = build_topology(inner)
+        if remove_cells:
+            return _remove_cells(inner_topo, remove_cells)
+        return inner_topo
+
+    # Composite operations: merge, add, shift, etc.
+    if shape in ("merge", "add", "shift",
                  "union", "keep", "trim", "skew", "dual", "splitcrossings",
                  "renumber", "subdivide", "makefaces", "hole", "intersect",
                  "less"):
@@ -483,6 +500,29 @@ def _composite(board_text: str) -> BoardTopology:
 
 # ============================================================
 # Helpers
+def _remove_cells(topo: BoardTopology, remove: set) -> BoardTopology:
+    """Remove specific cells from a topology, renumbering remaining cells."""
+    n = topo.num_sites
+    keep = [i for i in range(n) if i not in remove]
+    new_n = len(keep)
+    old_to_new = {old: new for new, old in enumerate(keep)}
+
+    coords = [topo.site_coords[i] for i in keep]
+    adj = np.full((topo.max_neighbors, new_n), new_n, dtype=np.int16)
+    for new_idx, old_idx in enumerate(keep):
+        for d in range(topo.max_neighbors):
+            old_nb = int(topo.adjacency[d, old_idx])
+            if old_nb < n and old_nb in old_to_new:
+                adj[d, new_idx] = old_to_new[old_nb]
+
+    regions = {}
+    for name, mask in topo.regions.items():
+        new_mask = np.array([mask[i] for i in keep])
+        regions[name] = new_mask
+
+    return BoardTopology(new_n, adj, topo.max_neighbors, coords, regions)
+
+
 # ============================================================
 
 def _from_edges(coords: list, edges: list) -> BoardTopology:
