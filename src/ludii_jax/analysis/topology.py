@@ -66,7 +66,10 @@ def build_topology(board_text: str) -> BoardTopology:
             n = args[0]
             return _hex_variable(list(range(1, n + 1)))
         if is_rectangle and len(args) >= 2:
-            return _hex_variable([args[0]] * args[1])
+            # Hex rectangle: alternating row widths (cols, cols-1, cols, cols-1, ...)
+            cols, rows = args[0], args[1]
+            widths = [cols if r % 2 == 0 else cols - 1 for r in range(rows)]
+            return _hex_variable(widths)
         if len(args) >= 3:
             return _hex_variable([int(a) for a in args])
         if args:
