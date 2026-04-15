@@ -11,7 +11,7 @@ state = env.init(jax.random.PRNGKey(0))
 state = env.step(state, action)
 ```
 
-**96% of all 1,212 Ludii games** compile and produce legal moves. **67 games** validated move-for-move against Ludii reference traces with zero divergence.
+**96% of all 1,212 Ludii games** compile and produce legal moves. **88 games** validated move-for-move against Ludii reference traces with zero divergence.
 
 ## How It Works
 
@@ -88,21 +88,21 @@ env = compile("path/to/game.lud")
 
 ## Validated Games
 
-67 games validated move-for-move against Ludii reference traces (50 moves each, zero divergence):
+88 games validated move-for-move against Ludii reference traces (up to 50 moves each, zero divergence):
 
-**Placement / Line:** Tic-Tac-Toe, Gomoku, Pente, Connect6, Yavalath, Squava, Notakto, Tic-Tac-Toe Misere, Tapatan, Picaria, Nine Holes, Three Men's Morris, Alquerque de Tres, Driesticken, Dris at-Talata, San-Noku-Narabe, Selbia, Ngre E E, Ngrin, Engijn Zirge, Djara-Badakh, Akidada, Roll-Ing to Four, Fanorona Telo, Wure Dune, Yavalax
+**Placement / Line:** Tic-Tac-Toe, Gomoku, Pente, Connect6, Yavalath, Squava, Notakto, Tic-Tac-Toe Misere, Tapatan, Picaria, Nine Holes, Three Men's Morris, Alquerque de Tres, Driesticken, Dris at-Talata, San-Noku-Narabe, Selbia, Ngre E E, Ngrin, Engijn Zirge, Djara-Badakh, Akidada, Roll-Ing to Four, Fanorona Telo, Wure Dune, Yavalax, Adidada
 
-**Connection:** Hex, Y, Havannah, Cross, Crossway, Gonnect, Unlur, Master Y, Chameleon, Diagonal Hex, Esa Hex, Gyre, Pippinzip, Scaffold, ConHex
+**Connection:** Hex, Y, Havannah, Cross, Crossway, Gonnect, Unlur, Master Y, Chameleon, Diagonal Hex, Esa Hex, Gyre, Pippinzip, Scaffold
 
-**Territory:** Reversi, Go, Weiqi, Atari Go, BlooGo, One-Eyed Go, Rolit, Cavity, Flower Shop, Redstone, Patok, Mity, Dorvolz, HexTrike, MacBeth
+**Territory:** Reversi, Go, Weiqi, Atari Go, BlooGo, One-Eyed Go, Rolit, Cavity, Flower Shop, Redstone, Patok, Mity, Dorvolz, HexTrike, MacBeth, Atoll
 
 **Movement:** English Draughts (with promotion + chain capture), Wolf and Sheep, Breakthrough, Clobber, Jeson Mor, Bamboo
 
-**Custodial:** Hasami Shogi, Dai Hasami Shogi
+**Custodial / Tafl:** Hasami Shogi, Dai Hasami Shogi, Tablut, Hnefatafl, Tawlbwrdd, ArdRi, Alea Evangelii, Poprad Game
 
-**Mancala:** Oware, Kalah
+**Mancala:** Oware, Kalah, Wari, Uril, Das Bohnenspiel, English Wari, Aw-li On-nam Ot-tjin, Enindji, Erherhe, Fondji, Kpo, Shono
 
-**Other:** Ecosys
+**Other:** Ecosys, Fang, Tibetan Jiuqi
 
 ## What's Supported
 
@@ -114,40 +114,62 @@ env = compile("path/to/game.lud")
 - Concentric ring boards (Nine Men's Morris) with Ludii-matching vertex numbering
 - Explicit graph boards (vertex + edge lists)
 - Star, complete, spiral graphs
-- Composite boards (merge, shift, add, remove, rotate, scale)
+- Composite boards (merge, shift, add, remove with cell indices, rotate, scale)
 
 ### Movement
 - **Step**: move 1-N cells in a direction (per-player forward restriction)
-- **Hop**: jump over a piece (opponent, friendly, or any occupied)
-- **Slide**: move any distance until blocked (direction + cell blocking)
+- **Hop**: jump over a piece (opponent, friendly, or any occupied; with chain capture)
+- **Slide**: move any distance until blocked (direction restriction + cell blocking)
 - **Leap**: non-adjacent jumps (knight, camel, custom offsets)
 - **Place**: put a piece on an empty site
-- **Sow**: mancala seed distribution with per-player tracks and store skipping
+- **Sow**: mancala seed distribution with per-player tracks, store skipping, and capture
 
 ### Effects
-- Custodial capture (from last-moved-to, orthogonal/all directions)
-- Surround capture (corner cells)
+- Custodial capture (from last-moved-to cell, orthogonal/all directions, hostile cells)
+- Surround capture at corners (orthogonal neighbor check)
 - Piece promotion (Counter -> DoubleCounter at opposite row)
-- Chain capture (moveAgain with forced continuation)
+- Chain capture (moveAgain with forced continuation from landing cell)
 - Forced capture priority (hops take precedence over steps)
+- Mill detection and removal (line-of-3 triggers opponent piece removal)
 - Score tracking
 
 ### End Conditions
-- Line of N (with region exclusion for starting rows)
-- Connection (flood-fill BFS between board sides)
+- Line of N (with region exclusion for starting rows, collinear geometry filter)
+- Connection (flood-fill BFS between board sides, hex side detection)
 - No legal moves
 - Piece count threshold
 - Full board (draw or by score)
 
 ### Game Features
 - N-player support (parameterized, not hardcoded)
-- Multi-phase games (placement -> movement with phase transition)
+- Multi-phase games (placement -> movement with automatic phase transition)
 - Per-player direction masks (forward diagonal for P1, backward diagonal for P2)
-- Per-piece direction and blocking (king vs regular pieces)
+- Per-piece direction, blocking, and movement compilation
 - Dice / stochastic elements
-- Mancala sowing with Kalah capture rules
+- Mancala sowing with Kalah capture rules and extra-turn-on-store
 - Recursive site set evaluation (difference, union, intersection, expand)
-- Named player regions extracted from equipment
+- Named player regions extracted from equipment definitions
+
+## Current Limitations
+
+The following game mechanics are not yet implemented. Games using these features will compile and produce legal moves, but may not match Ludii's behavior exactly:
+
+### Not Yet Supported
+- **Stacking / gravity placement** -- games like Connect Four where pieces drop to the lowest position in a column. Board is modeled flat, not as stacked columns.
+- **Maximum capture chain enforcement** -- draughts variants (Brazilian, International) that require choosing the longest available capture sequence. All captures are legal, not just the longest.
+- **Directional capture (approach/withdrawal)** -- Fanorona-style captures where the direction of movement determines which enemy pieces are taken.
+- **Vertex-based graph boards (`use:Vertex`)** -- games like Fox and Geese that play on intersections of a graph rather than cells. Composite boards using vertex mode produce incorrect topology.
+- **Complex composite board operations** -- deeply nested board transformations (splitCrossings, dual, keep, intersect) that go beyond simple merge/shift/remove. Games like ConHex and Fractal have boards we cannot reconstruct.
+- **Intervene / pattern constraints** -- Agon-style rules that restrict moves based on piece arrangement patterns.
+- **Multi-phase removal openings** -- games like Konane where the opening phase involves removing pieces before the movement phase begins.
+- **Hand selection mechanics** -- Quarto-style games where one player selects a piece for the opponent to place.
+- **Hidden information** -- games with fog of war, hidden pieces, or private hands are not supported.
+- **3+ player games with coalitions** -- while N-player alternation works, coalition logic and complex turn orders are not modeled.
+
+### Partial Support
+- **Mill removal (Nine Men's Morris)** -- mill detection and removal sub-phase works for the first mill in a game but has edge cases with repeated mills and placement-phase mills. NMM validates 23/50 moves.
+- **Tafl king capture** -- the king surround mechanic (captured when surrounded on all 4 sides) uses the throne-as-hostile heuristic which works for standard Tablut but may not cover all Tafl variants.
+- **Connection detection on large boards** -- the flood-fill BFS causes JIT compilation hangs on boards with 150+ cells. Boards under ~120 cells work correctly.
 
 ## Architecture
 
@@ -180,10 +202,10 @@ All game logic compiles to pure JAX functions at init time. Zero Python overhead
 
 ## Validation
 
-Reference traces generated from Ludii's Java engine are stored in `tests/traces/`. The validation suite replays each trace through ludii-jax and compares board states, legal move counts, and termination at every step.
+Reference traces generated from Ludii's Java engine are stored in `tests/traces/`. The validation suite replays each trace through ludii-jax and compares legal moves and termination at every step.
 
 ```bash
-# Validate against Ludii reference traces
+# Validate against Ludii reference traces (88/97 pass)
 python tests/test_against_ludii.py
 
 # Run compilation coverage on full corpus
