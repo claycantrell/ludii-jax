@@ -275,12 +275,12 @@ def compile(lud_text_or_path: str):
                     new_phase = jax.lax.select(
                         has_mill_now & in_movement & ~in_removal, BOARD_DTYPE(2), base_phase)
 
-                    # If entering removal phase, don't advance player (moveAgain)
+                    # If entering removal phase, revert to mover (who formed the mill)
                     entering_removal = (new_phase == 2) & ~in_removal
-                    adj = jax.lax.select(entering_removal, BOARD_DTYPE(-1), BOARD_DTYPE(0))
+                    new_player = jax.lax.select(entering_removal,
+                                                BOARD_DTYPE(mover), state.current_player)
 
-                    return state._replace(phase_idx=new_phase,
-                                          phase_step_count=state.phase_step_count + adj)
+                    return state._replace(phase_idx=new_phase, current_player=new_player)
             else:
                 def phase_transition(state, action):
                     piece_count = (state.board != EMPTY).any(axis=0).sum()
