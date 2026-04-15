@@ -11,12 +11,14 @@ from ..runtime.state import BOARD_DTYPE, ACTION_DTYPE, REWARD_DTYPE, EMPTY
 
 
 def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, num_players=2,
-                               directions=None):
+                               directions=None, hostile_cells=None):
     """Custodial capture: remove enemy pieces sandwiched between friendly pieces.
 
     Vectorized: precompute all (endpoint1, middle, endpoint2) triples as arrays,
     then check all at once with JAX indexing.
     directions: list of direction indices to check (None = all).
+    hostile_cells: optional bool array (n,) — cells that act as friendly endpoints
+    even when empty (e.g. throne in Tablut).
     """
     import numpy as np
     n = topology.num_sites
@@ -50,12 +52,15 @@ def compile_custodial_capture(topology, adjacency_lookup, piece_idx, length=1, n
     mid = jnp.array(middles, dtype=ACTION_DTYPE)
     ep2 = jnp.array(endpoints2, dtype=ACTION_DTYPE)
 
+    _hostile = hostile_cells if hostile_cells is not None else jnp.zeros(n, dtype=jnp.bool_)
+
     def apply_fn(state, original_player):
-        mover_mask = (state.board == original_player).any(axis=0)
+        # Hostile cells (e.g. throne) count as friendly endpoints
+        mover_mask = (state.board == original_player).any(axis=0) | _hostile
         enemy_mask = ((state.board != EMPTY) & (state.board != original_player)).any(axis=0)
 
         # Only check triples radiating from the last-moved-to cell
-        last_to = state.previous_actions[num_players]  # global last-to
+        last_to = state.previous_actions[num_players]
         from_last = (ep1 == last_to) | (ep2 == last_to)
 
         # Vectorized check: both endpoints friendly, middle is enemy, involves last move

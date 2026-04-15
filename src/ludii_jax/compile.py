@@ -136,8 +136,10 @@ def compile(lud_text_or_path: str):
                 play_text = get_text(rules_node)
 
         # Classify the PRIMARY mechanic from the play section structure
-        has_phases = "phases" in play_text.lower()
-        if has_phases and "handSite" in play_text and ("forEach Piece" in play_text or "move Step" in play_text):
+        # MULTI_PHASE: only when game has explicit "phases:" with hand placement AND movement
+        has_explicit_phases = "phases:" in play_text or "phases:{" in play_text.replace(" ", "")
+        has_hand = "hand" in info.full_text.lower() and "handSite" in play_text
+        if has_explicit_phases and has_hand and ("forEach Piece" in play_text or "move Step" in play_text):
             mechanic = "MULTI_PHASE"  # placement → movement
         elif "move Add" in play_text or "move Claim" in play_text:
             mechanic = "PLACE"
@@ -167,17 +169,37 @@ def compile(lud_text_or_path: str):
         # Compile based on structural mechanic
         # ============================================================
         if mechanic == "MULTI_PHASE":
-            # Phase 0: placement, Phase 1: movement (step along edges)
+            # Phase 0: placement, Phase 1: movement (step/hop along edges)
             place_legal, place_apply = compile_place(topo, piece_idx, np)
             # Detect hand count (pieces per player to place)
-            hand_count = 9  # default
+            hand_count = 1  # default: 1 piece per player
             m_count = re.search(r'count:(\d+)', info.full_text)
             if m_count:
                 hand_count = int(m_count.group(1))
-            total_placements = hand_count * np
+            # Count how many players have hands: (hand Each) = all, (hand P1) = 1
+            if "hand Each" in info.full_text:
+                hand_players = np
+            elif "hand P1" in info.full_text and "hand P2" not in info.full_text:
+                hand_players = 1
+            else:
+                hand_players = np
+            total_placements = hand_count * hand_players
 
-            # Step movement for phase 1
-            step_legal, step_apply = compile_step(topo, slide_lookup, piece_idx, np)
+            # Movement for phase 1: detect step/hop from piece content
+            move_has_step = info.has_step or "Step" in info.full_text
+            move_has_hop = info.has_hop or "Hop" in info.full_text
+            if move_has_hop:
+                hop_over = "opponent"
+                if "is Occupied" in info.full_text: hop_over = "any"
+                elif "is Friend" in info.full_text: hop_over = "mover"
+                hop_legal, hop_apply = compile_hop(topo, slide_lookup, hop_between, piece_idx, np, hop_over=hop_over)
+                step_legal_raw, step_apply_raw = compile_step(topo, slide_lookup, piece_idx, np, to_empty=True)
+                # Combine hop + step with hop priority
+                step_legal, step_apply = combine_move_fns(
+                    [step_legal_raw, hop_legal], [step_apply_raw, hop_apply],
+                    topo.num_sites, priority_indices=[1])
+            else:
+                step_legal, step_apply = compile_step(topo, slide_lookup, piece_idx, np)
             n_sites = topo.num_sites
             move_action_size = n_sites * n_sites
 
@@ -403,8 +425,13 @@ def compile(lud_text_or_path: str):
         cust_dirs = None
         if topo.max_neighbors == 8 and "Orthogonal" in info.full_text:
             cust_dirs = [0, 2, 4, 6]
+        # Hostile cells: throne/centrePoint acts as friendly for custodial
+        hostile = None
+        if "centrePoint" in info.full_text:
+            hostile = jnp.zeros(topo.num_sites, dtype=jnp.bool_)
+            hostile = hostile.at[topo.num_sites // 2].set(True)
         effects.append(compile_custodial_capture(topo, None, piece_idx, num_players=np,
-                                                  directions=cust_dirs))
+                                                  directions=cust_dirs, hostile_cells=hostile))
     if "surround" in info.full_text.lower():
         corner_only = "Corners" in info.full_text or "corners" in info.full_text
         surr_dirs = [0, 2, 4, 6] if topo.max_neighbors == 8 and "Orthogonal" in info.full_text else None
