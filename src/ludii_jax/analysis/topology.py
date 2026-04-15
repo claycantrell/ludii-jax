@@ -117,13 +117,14 @@ def build_topology(board_text: str) -> BoardTopology:
 
     # Remove: build inner board, then remove specific cells
     if shape == "remove":
-        # Extract cells to remove: cells:{N N N ...}
-        cells_match = re.search(r'cells:\{([^}]+)\}', board_text)
-        # Find inner board spec
-        inner = board_text[len("remove"):].strip()
-        # Strip cells:{...} from inner
+        # Extract cells to remove: cells:{N N N ...} or cells: N N N (braces stripped)
+        cells_match = re.search(r'cells:[\s{]*([\d\s]+)', board_text)
+        # Find inner board spec: everything between "remove" and "cells:"
+        rest = board_text[len("remove"):].strip()
         if cells_match:
-            inner = inner[:cells_match.start() - len("remove") - 1].strip()
+            # Inner is text before "cells:"
+            cells_pos = rest.find("cells:")
+            inner = rest[:cells_pos].strip() if cells_pos >= 0 else rest
             remove_cells = set(int(x) for x in re.findall(r'\d+', cells_match.group(1)))
         else:
             remove_cells = set()
