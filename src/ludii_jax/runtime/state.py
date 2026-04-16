@@ -13,10 +13,17 @@ from typing import Any
 import jax.numpy as jnp
 
 BOARD_DTYPE = jnp.int8
-ACTION_DTYPE = jnp.int16
+ACTION_DTYPE = jnp.int16  # upgraded to int32 at compile time for large boards
 REWARD_DTYPE = jnp.float32
 INDEX_DTYPE = jnp.int32   # for array indexing (Metal requires int32, not int8/int16)
 EMPTY = -1  # sentinel value for empty cells (cast to BOARD_DTYPE in context)
+
+
+def get_action_dtype(num_sites):
+    """Return int16 for small boards, int32 for boards where n*n > 32767."""
+    if num_sites * num_sites > 32767:
+        return jnp.int32
+    return ACTION_DTYPE
 
 
 def idx(x):
@@ -83,12 +90,15 @@ def build_game_state_class(info) -> tuple:
     else:
         num_pieces = len(info.pieces) if info.pieces else 1
 
+    # Determine action dtype based on board size
+    act_dtype = get_action_dtype(n)
+
     # Always present
     defaults["board"] = jnp.ones((num_pieces, n), dtype=BOARD_DTYPE) * EMPTY
     defaults["current_player"] = BOARD_DTYPE(0)
     defaults["phase_idx"] = BOARD_DTYPE(0)
     defaults["phase_step_count"] = BOARD_DTYPE(0)
-    defaults["previous_actions"] = -jnp.ones(np + 1, dtype=ACTION_DTYPE)
+    defaults["previous_actions"] = -jnp.ones(np + 1, dtype=act_dtype)
 
     # Conditional fields — only allocate what the compiled game actually reads/writes
     if info.has_score:
