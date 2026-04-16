@@ -125,19 +125,20 @@ def build_line_indices(topo: BoardTopology, length: int) -> jnp.ndarray:
         filtered = set()
         for line in lines:
             coords_l = [topo.site_coords[c] for c in line]
-            xs = [round(x, 2) for x, _ in coords_l]
-            ys = [round(y, 2) for _, y in coords_l]
+            xs = [x for x, _ in coords_l]
+            ys = [y for _, y in coords_l]
             # Collinear: all same x, all same y, or consistent slope
-            if len(set(xs)) == 1 or len(set(ys)) == 1:
+            eps = 0.05  # tolerance for floating-point hex coords
+            if max(xs) - min(xs) < eps or max(ys) - min(ys) < eps:
                 filtered.add(line)
             elif length == 2:
-                filtered.add(line)  # 2-cell lines are always "straight"
+                filtered.add(line)
             else:
-                # Check slope consistency for diagonal lines
+                # Check slope consistency for diagonal/hex lines
                 dx = [xs[i+1] - xs[i] for i in range(len(xs)-1)]
                 dy = [ys[i+1] - ys[i] for i in range(len(ys)-1)]
-                if all(abs(dx[i] - dx[0]) < 0.01 for i in range(len(dx))) and \
-                   all(abs(dy[i] - dy[0]) < 0.01 for i in range(len(dy))):
+                if all(abs(dx[i] - dx[0]) < eps for i in range(len(dx))) and \
+                   all(abs(dy[i] - dy[0]) < eps for i in range(len(dy))):
                     filtered.add(line)
         lines = filtered
 
