@@ -205,8 +205,12 @@ def build_topology(board_text: str) -> BoardTopology:
             return _remove_cells(inner_topo, remove_cells)
         return inner_topo
 
-    # Composite operations: merge, add, shift, etc.
-    if shape in ("merge", "add", "shift",
+    # Merge: combine multiple sub-boards, deduplicate overlapping vertices
+    if shape == "merge":
+        return _merge(board_text)
+
+    # Composite operations: add, shift, etc.
+    if shape in ("add", "shift",
                  "union", "keep", "trim", "skew", "dual", "splitcrossings",
                  "renumber", "subdivide", "makefaces", "hole", "intersect",
                  "less"):
@@ -573,6 +577,122 @@ def _spiral(n: int) -> BoardTopology:
         if i > 0:
             edges.append((i - 1, i))
     return _from_edges(coords, edges)
+
+
+def _eval_shift(text: str) -> tuple:
+    """Evaluate shift amounts from S-expression prefix notation.
+
+    Handles: '2 3', '0 / - 7 3 2', etc.
+    Returns (dx, dy).
+    """
+    tokens = text.split()
+    if not tokens:
+        return (0.0, 0.0)
+
+    def _eval_tokens(toks, pos=0):
+        if pos >= len(toks):
+            return 0.0, pos
+        t = toks[pos]
+        if t in ('+', '-', '*', '/'):
+            a, pos = _eval_tokens(toks, pos + 1)
+            b, pos = _eval_tokens(toks, pos)
+            if t == '+': return a + b, pos
+            if t == '-': return a - b, pos
+            if t == '*': return a * b, pos
+            if t == '/': return a / b if b != 0 else 0, pos
+        try:
+            return float(t), pos + 1
+        except ValueError:
+            return 0.0, pos + 1
+
+    # Parse two values (dx, dy)
+    dx, pos = _eval_tokens(tokens, 0)
+    dy, _ = _eval_tokens(tokens, pos)
+    return (dx, dy)
+
+
+def _merge(board_text: str) -> BoardTopology:
+    """Merge multiple sub-boards by deduplicating overlapping vertices.
+
+    Parses: merge shift DX DY (board_spec) shift DX DY (board_spec) ...
+    Builds each sub-board, shifts coordinates, merges vertices at same position.
+    """
+    rest = board_text[len("merge"):].strip()
+    sub_boards = []  # list of (dx, dy, topo)
+
+    # Find all "shift" blocks
+    parts = re.split(r'\bshift\b', rest)
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        # Find the inner board spec (first recognizable board keyword)
+        inner = part
+        board_start = len(part)
+        for kw in ["rectangle", "square", "hex", "tri", "concentric", "graph"]:
+            idx = part.lower().find(kw)
+            if idx >= 0 and idx < board_start:
+                board_start = idx
+                inner = part[idx:]
+        if board_start > 0:
+            # Everything before the board keyword is shift amounts
+            shift_text = part[:board_start].strip()
+            # Evaluate simple prefix arithmetic: / - 7 3 2 = (7-3)/2 = 2
+            dx, dy = _eval_shift(shift_text)
+            topo = build_topology(inner)
+            sub_boards.append((dx, dy, topo))
+        else:
+            topo = build_topology(part)
+            sub_boards.append((0, 0, topo))
+
+    if not sub_boards:
+        # Fallback: try to find any recognizable board
+        return _composite(board_text)
+
+    # Merge: collect all vertices with shifted coords, deduplicate by position
+    all_coords = []
+    all_edges = []
+    offset = 0
+    eps = 0.3  # tolerance for vertex deduplication
+
+    for dx, dy, topo in sub_boards:
+        for i in range(topo.num_sites):
+            x, y = topo.site_coords[i]
+            all_coords.append((x + dx, y + dy))
+        # Collect edges with offset
+        for i in range(topo.num_sites):
+            for d in range(topo.max_neighbors):
+                nb = int(topo.adjacency[d, i])
+                if nb < topo.num_sites:
+                    a, b = offset + i, offset + nb
+                    if a < b:
+                        all_edges.append((a, b))
+        offset += topo.num_sites
+
+    # Deduplicate vertices by proximity
+    final_coords = []
+    old_to_new = {}
+    for i, (x, y) in enumerate(all_coords):
+        # Find existing vertex at same position
+        found = -1
+        for j, (fx, fy) in enumerate(final_coords):
+            if abs(x - fx) < eps and abs(y - fy) < eps:
+                found = j
+                break
+        if found >= 0:
+            old_to_new[i] = found
+        else:
+            old_to_new[i] = len(final_coords)
+            final_coords.append((x, y))
+
+    # Remap edges
+    final_edges = set()
+    for a, b in all_edges:
+        na, nb = old_to_new[a], old_to_new[b]
+        if na != nb:
+            final_edges.add((min(na, nb), max(na, nb)))
+
+    return _from_edges(final_coords, list(final_edges))
 
 
 def _composite(board_text: str) -> BoardTopology:
