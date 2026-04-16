@@ -31,5 +31,8 @@ tests/*.class
 # Large binaries (download separately)
 tests/Ludii.jar
 
+# Generated traces (regenerate with generate_traces.py)
+tests/traces/
+
 # Claude Code
 .claude/
