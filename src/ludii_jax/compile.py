@@ -122,6 +122,8 @@ def compile(lud_text_or_path: str):
 
         if mechanic == "MULTI_PHASE":
             start_fn = lambda state: state  # multi-phase starts empty
+        elif mechanic == "MULTI_PHASE_REMOVE":
+            start_fn = _build_start_fn(tree, info, topo)  # pieces pre-placed, then removed
         else:
             start_fn = _build_start_fn(tree, info, topo)
 
@@ -254,6 +256,62 @@ def compile(lud_text_or_path: str):
                     piece_count = (state.board != EMPTY).any(axis=0).sum()
                     new_phase = jax.lax.select(piece_count >= _total, BOARD_DTYPE(1), state.phase_idx)
                     return state._replace(phase_idx=new_phase)
+
+        elif mechanic == "MULTI_PHASE_REMOVE":
+            # Phase 0: remove own pieces, Phase 1+: movement (hop/step)
+            n_sites = topo.num_sites
+            move_action_size = n_sites * n_sites
+
+            # Remove phase: select own piece to remove
+            def remove_legal(state):
+                own = (state.board[piece_idx] == state.current_player).astype(BOARD_DTYPE)
+                return jnp.concatenate([own, jnp.zeros(move_action_size - n_sites, dtype=BOARD_DTYPE)])
+            def remove_apply(state, action):
+                cell = jnp.minimum(action, n_sites - 1)
+                board = state.board.at[:, cell].set(EMPTY)
+                pa = state.previous_actions.at[state.current_player.astype(jnp.int32)].set(
+                    ACTION_DTYPE(cell)).at[np].set(ACTION_DTYPE(cell))
+                return state._replace(board=board, previous_actions=pa)
+
+            # Movement phase: compile hop or step
+            move_has_hop = info.has_hop or "Hop" in info.full_text
+            if move_has_hop:
+                hop_legal, hop_apply = compile_hop(topo, slide_lookup, hop_between, piece_idx, np)
+                step_legal_mv = hop_legal
+                step_apply_mv = hop_apply
+            else:
+                step_legal_mv, step_apply_mv = compile_step(topo, slide_lookup, piece_idx, np)
+
+            def move_legal(state):
+                return step_legal_mv(state).flatten().astype(BOARD_DTYPE)
+            def move_apply(state, action):
+                return step_apply_mv(state, action)
+
+            # Detect number of remove phases (usually 1-2)
+            remove_count = play_text.lower().count("move remove")
+            if remove_count < 1: remove_count = 1
+
+            def multi_legal(state):
+                return jax.lax.switch(jnp.minimum(state.phase_idx, 1),
+                                      [remove_legal, move_legal], state)
+            def multi_apply(state, action):
+                return jax.lax.switch(jnp.minimum(state.phase_idx, 1),
+                                      [remove_apply, move_apply], state, action)
+
+            legal_fn = multi_legal
+            apply_fn = multi_apply
+            action_size = move_action_size
+
+            # Phase transition: after remove_count removals, switch to movement
+            _rc = remove_count
+            def phase_transition(state, action):
+                # Count how many cells are empty that were originally occupied
+                # Simpler: track via phase_step_count
+                in_remove = (state.phase_idx == 0)
+                new_phase = jax.lax.select(
+                    in_remove & (state.phase_step_count >= _rc),
+                    BOARD_DTYPE(1), state.phase_idx)
+                return state._replace(phase_idx=new_phase)
 
         elif mechanic == "PLACE":
             if info.has_stacking:
@@ -446,7 +504,7 @@ def compile(lud_text_or_path: str):
 
     # Phase transition function (for multi-phase games)
     addl_info_fn = None
-    if mechanic == "MULTI_PHASE":
+    if mechanic in ("MULTI_PHASE", "MULTI_PHASE_REMOVE"):
         addl_info_fn = phase_transition
 
     game_rules = compose_game(

@@ -182,6 +182,8 @@ def _classify_mechanic(info: GameInfo) -> str:
 
     if has_explicit_phases and has_hand and ("forEach Piece" in pt or "move Step" in pt):
         return "MULTI_PHASE"
+    if has_explicit_phases and "move Remove" in pt and ("Hop" in pt or "move Step" in pt or "forEach Piece" in pt):
+        return "MULTI_PHASE_REMOVE"
     if "move Add" in pt or "move Claim" in pt:
         return "PLACE"
     if "satisfy" in pt:
