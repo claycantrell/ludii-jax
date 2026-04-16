@@ -362,9 +362,12 @@ def compile(lud_text_or_path: str):
                     pi_step_dirs = step_dirs
                     pi_hop_dirs = hop_dirs
 
-                # Step to empty: forced-capture priority OR step-only games with explicit empty check
+                # Step to empty: forced-capture priority, OR step-only games where ALL
+                # step destinations are empty (no capture-by-step)
+                has_capture_step = "is Enemy" in piece_text or "remove" in piece_text.lower()
                 step_to_empty = (has_priority and info.has_hop) or \
-                    (info.has_step and not info.has_slide and "is Empty" in piece_text and "Step" in piece_text)
+                    (info.has_step and not info.has_slide and not has_capture_step and
+                     "is Empty" in piece_text and "Step" in piece_text)
                 if info.has_step or (not info.has_hop and not info.has_slide and not info.has_leap):
                     l, a = compile_step(topo, slide_lookup, pi, np, directions=pi_step_dirs,
                                         reset_chain=has_chain,
