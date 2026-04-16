@@ -103,16 +103,24 @@ def build_topology(board_text: str) -> BoardTopology:
         return _grid(5, 5)
 
     shape = tokens[0].lower()
+    use_vertex = "use:Vertex" in board_text or "use:vertex" in board_text
 
     if shape == "square":
         args = [int(t) for t in tokens[1:] if t.isdigit()]
         n = args[0] if args else 8
+        if use_vertex:
+            has_diag = "diagonals:" in board_text.lower()
+            return _vertex_grid(n, n, diagonals=has_diag)
         return _grid(n, n)
 
     if shape == "rectangle":
         args = [int(t) for t in tokens[1:] if t.isdigit()]
         if len(args) >= 2:
-            return _grid(args[1], args[0])  # Ludii: (rectangle rows cols), we want (width=cols, height=rows)
+            rows, cols = args[0], args[1]
+            if use_vertex:
+                has_diag = "diagonals:" in board_text.lower()
+                return _vertex_grid(cols, rows, diagonals=has_diag)
+            return _grid(cols, rows)
         return _grid(8, 8)
 
     if shape in ("hex", "hexagon"):
@@ -223,6 +231,42 @@ def build_topology(board_text: str) -> BoardTopology:
 # ============================================================
 # Board constructors
 # ============================================================
+
+def _vertex_grid(width: int, height: int, diagonals: bool = False) -> BoardTopology:
+    """Vertex grid: intersections of a rectangular grid.
+
+    For (square N use:Vertex): width=N+1, height=N+1, 4 or 8 directions.
+    Ludii convention: alternating diagonals for some games.
+    """
+    n = width * height
+    coords = [(c, r) for r in range(height) for c in range(width)]
+
+    if diagonals:
+        # 8 directions: N, NE, E, SE, S, SW, W, NW (same as cell grid)
+        offsets = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
+        max_nb = 8
+    else:
+        # 4 orthogonal directions: N, E, S, W
+        offsets = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+        max_nb = 4
+
+    adj = np.full((max_nb, n), n, dtype=np.int16)
+    for idx in range(n):
+        r, c = idx // width, idx % width
+        for d, (dr, dc) in enumerate(offsets):
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < height and 0 <= nc < width:
+                adj[d, idx] = nr * width + nc
+
+    regions = {
+        "bottom": np.array([i // width == 0 for i in range(n)]),
+        "top": np.array([i // width == height - 1 for i in range(n)]),
+        "left": np.array([i % width == 0 for i in range(n)]),
+        "right": np.array([i % width == width - 1 for i in range(n)]),
+    }
+
+    return BoardTopology(n, adj, max_nb, coords, regions)
+
 
 def _grid(width: int, height: int) -> BoardTopology:
     """Rectangular grid with 8 directions (ortho + diagonal).
