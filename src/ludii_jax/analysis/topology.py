@@ -209,8 +209,18 @@ def build_topology(board_text: str) -> BoardTopology:
     if shape == "merge":
         return _merge(board_text)
 
-    # Composite operations: add, shift, etc.
-    if shape in ("add", "shift",
+    # Add: extract inner board spec and build it (edges added implicitly by _from_edges)
+    if shape == "add":
+        inner = board_text[len("add"):].strip()
+        # Find the inner board keyword
+        for kw in ["merge", "square", "rectangle", "hex", "tri", "concentric", "graph"]:
+            idx = inner.lower().find(kw)
+            if idx >= 0:
+                return build_topology(inner[idx:])
+        return _composite(board_text)
+
+    # Composite operations: shift, etc.
+    if shape in ("shift",
                  "union", "keep", "trim", "skew", "dual", "splitcrossings",
                  "renumber", "subdivide", "makefaces", "hole", "intersect",
                  "less"):
