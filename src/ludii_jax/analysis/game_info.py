@@ -43,6 +43,7 @@ class GameInfo:
     has_phases: bool = False
     has_hand: bool = False
     has_stacking: bool = False
+    max_stack_height: int = 1  # >1 for stacking games
     has_capture: bool = False
     has_flip: bool = False
     has_promote: bool = False
@@ -141,6 +142,18 @@ def extract_game_info(tree) -> GameInfo:
         info.has_connected = "is Connected" in rules_text
         info.has_phases = "phases" in rules_text.lower() or "phase" in rules_text.lower()
         info.has_hand = "hand" in info.full_text.lower() or "Hand" in info.full_text
+
+        # Stacking detection
+        if "stack:True" in info.full_text or "stack:true" in info.full_text:
+            info.has_stacking = True
+            # Detect max stack height: (< (size Stack at:(site)) N) or just N near Stack
+            m_stack = re.search(r'<\s*size Stack.*?(\d+)', info.full_text)
+            if not m_stack:
+                m_stack = re.search(r'size Stack.*?(\d+)', info.full_text)
+            if m_stack:
+                info.max_stack_height = int(m_stack.group(1))
+            else:
+                info.max_stack_height = 8
 
         # Mancala seed count
         m = re.search(r'set Count (\d+)', rules_text)

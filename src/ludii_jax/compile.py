@@ -20,7 +20,7 @@ from .runtime.state import build_game_state_class, BOARD_DTYPE, ACTION_DTYPE, EM
 from .runtime.environment import Environment
 from .compiler.moves import (
     compile_step, compile_hop, compile_slide, compile_leap,
-    compile_place, compile_sow, compile_dice_move,
+    compile_place, compile_stack_place, compile_sow, compile_dice_move,
     combine_move_fns,
 )
 from .compiler.effects import (
@@ -256,7 +256,10 @@ def compile(lud_text_or_path: str):
                     return state._replace(phase_idx=new_phase)
 
         elif mechanic == "PLACE":
-            legal_fn, apply_fn = compile_place(topo, piece_idx, np)
+            if info.has_stacking:
+                legal_fn, apply_fn = compile_stack_place(topo, info.max_stack_height, np)
+            else:
+                legal_fn, apply_fn = compile_place(topo, piece_idx, np)
             action_size = topo.num_sites
 
         elif mechanic == "REMOVE":

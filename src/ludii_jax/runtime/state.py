@@ -77,7 +77,11 @@ def build_game_state_class(info) -> tuple:
 
     n = info.topology.num_sites
     np = info.num_players
-    num_pieces = len(info.pieces) if info.pieces else 1
+    # For stacking games, board layers = stack height instead of piece types
+    if info.has_stacking:
+        num_pieces = info.max_stack_height
+    else:
+        num_pieces = len(info.pieces) if info.pieces else 1
 
     # Always present
     defaults["board"] = jnp.ones((num_pieces, n), dtype=BOARD_DTYPE) * EMPTY

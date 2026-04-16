@@ -375,6 +375,34 @@ def compile_place(topology, piece_idx, num_players):
     return legal_fn, apply_fn
 
 
+def compile_stack_place(topology, max_height, num_players):
+    """Compile stacking placement: place piece on top of stack at any site.
+
+    Board shape: (max_height, num_sites). Layer 0 = bottom of stack.
+    Legal: any site where top of stack < max_height.
+    Apply: place at lowest empty layer.
+    """
+    n = topology.num_sites
+
+    def legal_fn(state):
+        # Legal if at least one layer is empty (stack not full)
+        has_space = (state.board == EMPTY).any(axis=0).astype(BOARD_DTYPE)
+        return has_space
+
+    def apply_fn(state, action):
+        cell = action
+        # Find lowest empty layer at this cell
+        layers = state.board[:, cell]
+        is_empty = (layers == EMPTY).astype(jnp.int32)
+        # First empty layer = argmax of (is_empty) since argmax returns first True
+        layer = jnp.argmax(is_empty).astype(jnp.int32)
+        board = state.board.at[layer, cell].set(state.current_player)
+        pa = _update_actions(state, action, num_players)
+        return state._replace(board=board, previous_actions=pa)
+
+    return legal_fn, apply_fn
+
+
 def compile_sow(topology, num_players, initial_seeds=4, has_stores=True,
                 stores_in_track=True):
     """Compile mancala sowing: pick a pit, distribute seeds along track.

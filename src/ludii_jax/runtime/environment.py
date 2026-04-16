@@ -29,7 +29,10 @@ class Environment:
         self.game_state_cls = game_state_cls
         self.num_sites = game_info.topology.num_sites
         self.num_players = game_info.num_players
-        self.num_pieces = len(game_info.pieces) if game_info.pieces else 1
+        if game_info.has_stacking:
+            self.num_pieces = game_info.max_stack_height
+        else:
+            self.num_pieces = len(game_info.pieces) if game_info.pieces else 1
 
         self.num_actions = game_rules['action_size']
         self._start = game_rules['start_rules']
