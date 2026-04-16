@@ -13,6 +13,35 @@ state = env.step(state, action)
 
 **96% of all 1,212 Ludii games** compile and produce legal moves. **88 games** validated move-for-move against Ludii reference traces with zero divergence.
 
+## Performance
+
+<p align="center">
+  <img src="benchmarks/results/batch_scaling.png" width="700" alt="Throughput scaling with batch size"/>
+</p>
+
+**6.8 million steps/sec** for Tic-Tac-Toe. **2.4 million** for Go 9x9. On CPU only -- GPU multiplies these numbers further.
+
+<p align="center">
+  <img src="benchmarks/results/peak_throughput.png" width="700" alt="Peak throughput by game"/>
+</p>
+
+The key: `jax.vmap` runs thousands of games as a single vectorized kernel. No Python loop, no per-game overhead.
+
+<p align="center">
+  <img src="benchmarks/results/speedup.png" width="700" alt="Vectorization speedup"/>
+</p>
+
+| Game | Board | Single | Batch 4096 | Speedup |
+|------|-------|--------|-----------|---------|
+| Tic-Tac-Toe | 3x3 | 4K | **6.8M** | 1,700x |
+| Go | 9x9 | 11K | **2.4M** | 218x |
+| Reversi | 8x8 | 14K | **2.6M** | 186x |
+| Gomoku | 15x15 | 14K | **785K** | 56x |
+| Go | 19x19 | 14K | **656K** | 47x |
+| Hex | 11x11 | 12K | **79K** | 7x |
+
+*Apple M3 CPU. Compile once in ~150ms, then pure XLA execution. Hex is lower due to flood-fill BFS in the connection end condition.*
+
 ## How It Works
 
 ```
