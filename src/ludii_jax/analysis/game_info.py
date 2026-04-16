@@ -50,6 +50,9 @@ class GameInfo:
     has_score: bool = False
     has_connected: bool = False
 
+    # Primary mechanic: PLACE, MOVEMENT, FOREACH_PIECE, MULTI_PHASE, REMOVE, SELECT, MANCALA, DICE
+    mechanic: str = "PLACE"
+
     # Raw text for pattern matching
     full_text: str = ""
     play_text: str = ""
@@ -144,7 +147,45 @@ def extract_game_info(tree) -> GameInfo:
         if m:
             info.mancala_seeds = int(m.group(1))
 
+        # Store play text for compile.py (fallback to full rules if no play node)
+        info.play_text = play_mt if play_mt else rules_text
+
+    # Classify primary mechanic
+    info.mechanic = _classify_mechanic(info)
+
     return info
+
+
+def _classify_mechanic(info: GameInfo) -> str:
+    """Classify the primary game mechanic from detected features."""
+    if info.is_mancala:
+        return "MANCALA"
+    if info.is_dice:
+        return "DICE"
+
+    pt = info.play_text
+    has_explicit_phases = "phases:" in pt or "phases:{" in pt.replace(" ", "")
+    has_hand = "hand" in info.full_text.lower() and "handSite" in pt
+
+    if has_explicit_phases and has_hand and ("forEach Piece" in pt or "move Step" in pt):
+        return "MULTI_PHASE"
+    if "move Add" in pt or "move Claim" in pt:
+        return "PLACE"
+    if "satisfy" in pt:
+        return "PLACE"
+    if "move Remove" in pt and "forEach Piece" not in pt:
+        return "REMOVE"
+    if "move Select" in pt and "forEach Piece" not in pt and "move Step" not in pt:
+        return "SELECT"
+    if "forEach Site" in pt and "forEach Piece" not in pt:
+        return "PLACE"
+    if "handSite" in pt and "forEach Piece" not in pt:
+        return "PLACE"
+    if "forEach Piece" in pt:
+        return "FOREACH_PIECE"
+    if "move Step" in pt or "move Hop" in pt or "move Slide" in pt:
+        return "MOVEMENT"
+    return "PLACE"
 
 
 def _extract_players(tree, info: GameInfo):

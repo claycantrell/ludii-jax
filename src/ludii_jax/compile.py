@@ -74,9 +74,9 @@ def compile(lud_text_or_path: str):
     # Determine action size and compile movement
     piece_idx = 0  # default piece
     piece_names = [p.name for p in info.pieces] if info.pieces else ["token"]
-    mechanic = None  # set by mechanic detection below
+    mechanic = info.mechanic
 
-    if info.is_mancala:
+    if mechanic == "MANCALA":
         # Detect stores-in-track: Kalah-style has "moveAgain" tied to store landing
         # Oware-style has no store sowing (track starts at pit 1, not store 0)
         stores_in_track = "moveAgain" in info.full_text and "mapEntry" in info.full_text
@@ -95,7 +95,7 @@ def compile(lud_text_or_path: str):
                 sc = sc.at[i].set(BOARD_DTYPE(_seeds))
             return state._replace(seed_counts=sc, pit_owner=_po)
 
-    elif info.is_dice:
+    elif mechanic == "DICE":
         legal_fn, apply_fn = compile_dice_move(topo, piece_idx, np)
         action_size = topo.num_sites
         base_start = _build_start_fn(tree, info, topo)
@@ -118,47 +118,7 @@ def compile(lud_text_or_path: str):
         start_fn = dice_start
 
     else:
-        # ============================================================
-        # Structural mechanic detection from the play section's parse tree
-        # ============================================================
-        rules_node = find_child(tree, "rules")
-        play_text = ""
-        if rules_node:
-            rules_content = find_child(rules_node, "rules_content")
-            if rules_content:
-                for item in find_all(rules_content, "rules_item"):
-                    play_node = find_child(item, "play")
-                    if play_node:
-                        play_text = get_text(play_node)
-                        break
-            # Fallback: use full rules text when no play node found (phase-based games)
-            if not play_text:
-                play_text = get_text(rules_node)
-
-        # Classify the PRIMARY mechanic from the play section structure
-        # MULTI_PHASE: only when game has explicit "phases:" with hand placement AND movement
-        has_explicit_phases = "phases:" in play_text or "phases:{" in play_text.replace(" ", "")
-        has_hand = "hand" in info.full_text.lower() and "handSite" in play_text
-        if has_explicit_phases and has_hand and ("forEach Piece" in play_text or "move Step" in play_text):
-            mechanic = "MULTI_PHASE"  # placement → movement
-        elif "move Add" in play_text or "move Claim" in play_text:
-            mechanic = "PLACE"
-        elif "satisfy" in play_text:
-            mechanic = "PLACE"
-        elif "move Remove" in play_text and "forEach Piece" not in play_text:
-            mechanic = "REMOVE"
-        elif "move Select" in play_text and "forEach Piece" not in play_text and "move Step" not in play_text:
-            mechanic = "SELECT"
-        elif "forEach Site" in play_text and "forEach Piece" not in play_text:
-            mechanic = "PLACE"
-        elif "handSite" in play_text and "forEach Piece" not in play_text:
-            mechanic = "PLACE"
-        elif "forEach Piece" in play_text:
-            mechanic = "FOREACH_PIECE"
-        elif "move Step" in play_text or "move Hop" in play_text or "move Slide" in play_text:
-            mechanic = "MOVEMENT"
-        else:
-            mechanic = "PLACE"
+        play_text = info.play_text
 
         if mechanic == "MULTI_PHASE":
             start_fn = lambda state: state  # multi-phase starts empty
