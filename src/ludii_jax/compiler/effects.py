@@ -150,7 +150,7 @@ def compile_set_score(num_players):
     """Set score to count of occupied cells."""
     def apply_fn(state, original_player):
         count = (state.board == original_player).any(axis=0).sum().astype(REWARD_DTYPE)
-        scores = state.scores.at[original_player].set(count)
+        scores = state.scores.at[original_player.astype(jnp.int32)].set(count)
         return state._replace(scores=scores)
     return apply_fn
 

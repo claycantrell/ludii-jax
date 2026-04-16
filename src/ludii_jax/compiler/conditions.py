@@ -24,12 +24,12 @@ def compile_line_win(line_indices, piece_idx, num_players, exclude_regions=None)
         line_matches = (occupied[line_indices] == 1).all(axis=1)
         if exclude_regions is not None:
             # Exclude lines where ALL cells are in the mover's starting region
-            player_region = exclude_regions[state.current_player]
+            player_region = exclude_regions[state.current_player.astype(jnp.int32)]
             all_in_region = player_region[line_indices].all(axis=1)
             line_matches = line_matches & ~all_in_region
         won = line_matches.any()
         winners = jnp.where(won,
-                            jnp.zeros(num_players, jnp.int8).at[state.current_player].set(1),
+                            jnp.zeros(num_players, jnp.int8).at[state.current_player.astype(jnp.int32)].set(1),
                             EMPTY * jnp.ones(num_players, jnp.int8))
         return winners, won
 
@@ -59,7 +59,7 @@ def compile_no_moves_loss(num_players):
         no_moves = ~state.legal_action_mask.any()
         # Current player (who just moved) wins, opponent (next) loses
         winners = jnp.where(no_moves,
-                            jnp.zeros(num_players, jnp.int8).at[state.current_player].set(1),
+                            jnp.zeros(num_players, jnp.int8).at[state.current_player.astype(jnp.int32)].set(1),
                             EMPTY * jnp.ones(num_players, jnp.int8))
         return winners, no_moves
     return end_fn
@@ -77,7 +77,7 @@ def compile_captured_all(num_players, min_pieces=3):
         # and opponent count has dropped below threshold from captures
         won = (opp_count < min_pieces) & (total >= 2 * min_pieces)
         winners = jnp.where(won,
-                            jnp.zeros(num_players, jnp.int8).at[state.current_player].set(1),
+                            jnp.zeros(num_players, jnp.int8).at[state.current_player.astype(jnp.int32)].set(1),
                             EMPTY * jnp.ones(num_players, jnp.int8))
         return winners, won
     return end_fn
@@ -99,7 +99,7 @@ def compile_full_board_by_score(num_players):
         full = (state.board != EMPTY).any(axis=0).all()
         best = jnp.argmax(state.scores)
         winners = jnp.where(full,
-                            jnp.zeros(num_players, jnp.int8).at[best].set(1),
+                            jnp.zeros(num_players, jnp.int8).at[best.astype(jnp.int32)].set(1),
                             EMPTY * jnp.ones(num_players, jnp.int8))
         return winners, full
     return end_fn
@@ -149,7 +149,7 @@ def compile_connected_win(topology, side_sets, piece_idx, num_players):
             reached = _flood_fill(occupied, mask_a)
             won = won | (reached & mask_b).any()
         winners = jnp.where(won,
-                            jnp.zeros(num_players, jnp.int8).at[state.current_player].set(1),
+                            jnp.zeros(num_players, jnp.int8).at[state.current_player.astype(jnp.int32)].set(1),
                             EMPTY * jnp.ones(num_players, jnp.int8))
         return winners, won
 

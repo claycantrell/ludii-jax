@@ -15,7 +15,13 @@ import jax.numpy as jnp
 BOARD_DTYPE = jnp.int8
 ACTION_DTYPE = jnp.int16
 REWARD_DTYPE = jnp.float32
-EMPTY = BOARD_DTYPE(-1)
+INDEX_DTYPE = jnp.int32   # for array indexing (Metal requires int32, not int8/int16)
+EMPTY = -1  # sentinel value for empty cells (cast to BOARD_DTYPE in context)
+
+
+def idx(x):
+    """Cast to int32 for safe array indexing (Metal backend requires this)."""
+    return jnp.asarray(x, dtype=jnp.int32)
 
 
 class State:

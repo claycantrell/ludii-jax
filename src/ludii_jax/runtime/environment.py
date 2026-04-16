@@ -16,6 +16,11 @@ from .state import State, BOARD_DTYPE, ACTION_DTYPE, REWARD_DTYPE, EMPTY
 MAX_STEP_COUNT = 2000
 
 
+def _select_state(cond, true_state, false_state):
+    """Branchless state selection (works on Metal/GPU without lax.cond)."""
+    return jax.tree.map(lambda t, f: jnp.where(cond, t, f), true_state, false_state)
+
+
 class Environment:
     """JAX-accelerated game environment compiled from a Ludii .lud file."""
 
@@ -64,24 +69,21 @@ class Environment:
     def step(self, state: State, action, key=None) -> State:
         is_illegal = ~state.legal_action_mask[action]
         current_player = state.current_player
+        already_done = state.terminated | state.truncated
 
-        state = jax.lax.cond(
-            (state.terminated | state.truncated),
-            lambda: state.replace(rewards=jnp.zeros_like(state.rewards)),
-            lambda: self._step(state, action, key),
-        )
+        # Always compute the step (branchless for Metal/GPU compatibility)
+        stepped = self._step(state, action, key)
 
-        state = jax.lax.cond(
-            is_illegal,
-            lambda: self._illegal_action(state, current_player),
-            lambda: state,
-        )
+        # If already terminated, return zeros rewards instead of step result
+        state = _select_state(already_done, state.replace(rewards=jnp.zeros_like(state.rewards)), stepped)
 
-        state = jax.lax.cond(
-            state.terminated,
-            lambda: state.replace(legal_action_mask=jnp.ones_like(state.legal_action_mask)),
-            lambda: state,
-        )
+        # If illegal action, apply penalty
+        illegal_state = self._illegal_action(state, current_player)
+        state = _select_state(is_illegal, illegal_state, state)
+
+        # If terminated, set all actions legal (for API consistency)
+        done_state = state.replace(legal_action_mask=jnp.ones_like(state.legal_action_mask))
+        state = _select_state(state.terminated, done_state, state)
 
         return state
 
@@ -135,7 +137,7 @@ class Environment:
             legal_action_mask=legal,
             winners=winners,
             rewards=rewards,
-            mover_reward=rewards[original_player],
+            mover_reward=rewards[original_player.astype(jnp.int32)],
             terminated=terminated,
             truncated=truncated,
             global_step_count=step_count,

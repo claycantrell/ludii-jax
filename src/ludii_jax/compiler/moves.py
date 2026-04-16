@@ -17,7 +17,8 @@ from ..runtime.state import BOARD_DTYPE, ACTION_DTYPE, EMPTY
 
 def _update_actions(state, dst, num_players):
     """Update previous_actions with the destination cell. Used by all apply_fns."""
-    return state.previous_actions.at[state.current_player].set(
+    cp = state.current_player.astype(jnp.int32)
+    return state.previous_actions.at[cp].set(
         ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
 
 
@@ -70,14 +71,14 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1,
         dests = slide_lookup[:, :, distance]  # (max_nb, n)
         on_board = dests < n
         if to_empty:
-            dest_ok = (state.board == EMPTY).all(axis=0)[dests.clip(0, n - 1)]
+            dest_ok = ((state.board == EMPTY).astype(BOARD_DTYPE)).min(axis=0).astype(jnp.bool_)[dests.clip(0, n - 1)]
         else:
             friendly = (state.board == state.current_player).any(axis=0)
             dest_ok = ~friendly[dests.clip(0, n - 1)]
         valid = owned[jnp.newaxis, :] & dest_ok & on_board
 
         if per_player:
-            dm = dir_masks[state.current_player]
+            dm = dir_masks[state.current_player.astype(jnp.int32)]
         else:
             dm = dir_masks
         valid = valid & dm[:, jnp.newaxis]
@@ -101,7 +102,7 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1,
         board = board.at[piece_idx, dst].set(state.current_player)
         # Promotion: if piece is on promotion row, swap to promoted piece
         if do_promote:
-            should_promote = promo_rows[state.current_player, dst]
+            should_promote = promo_rows[state.current_player.astype(jnp.int32), dst]
             board = jnp.where(should_promote,
                               board.at[promote_from, dst].set(EMPTY).at[promote_to, dst].set(state.current_player),
                               board)
@@ -135,7 +136,7 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
 
     def _get_dir_mask(state):
         if per_player:
-            return dir_masks[state.current_player]
+            return dir_masks[state.current_player.astype(jnp.int32)]
         return dir_masks
 
     def legal_fn(state):
@@ -157,7 +158,7 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
 
         if hop_over_any:
             # Land on empty only
-            empty = (state.board == EMPTY).all(axis=0)
+            empty = ((state.board == EMPTY).astype(BOARD_DTYPE)).min(axis=0).astype(jnp.bool_)
             valid = valid & empty[dests.clip(0, n - 1)]
         elif hop_over_friendly:
             enemy = ((state.board != EMPTY) & (state.board != state.current_player)).any(axis=0)
@@ -198,7 +199,7 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
 
             # Promotion: if piece landed on promotion row, swap layers
             if do_promote:
-                should_promote = promo_rows[state.current_player, dst]
+                should_promote = promo_rows[state.current_player.astype(jnp.int32), dst]
                 board = jnp.where(should_promote,
                                   board.at[promote_from, dst].set(EMPTY).at[promote_to, dst].set(state.current_player),
                                   board)
@@ -211,7 +212,7 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
                 landing_from_dst = slide_lookup[:, dst, 2]
                 on_board_c = (landing_from_dst < n) & (between_from_dst < n)
                 enemy_mask = ((board != EMPTY) & (board != state.current_player)).any(axis=0)
-                empty_mask = (board == EMPTY).all(axis=0)
+                empty_mask = ((board == EMPTY).astype(BOARD_DTYPE)).min(axis=0).astype(jnp.bool_)
                 can_chain = on_board_c & dm & \
                     enemy_mask[between_from_dst.clip(0, n - 1)] & \
                     empty_mask[landing_from_dst.clip(0, n - 1)]
@@ -364,7 +365,7 @@ def compile_place(topology, piece_idx, num_players):
     n = topology.num_sites
 
     def legal_fn(state):
-        return (state.board == EMPTY).all(axis=0).astype(BOARD_DTYPE)
+        return ((state.board == EMPTY).astype(BOARD_DTYPE)).min(axis=0).astype(jnp.bool_).astype(BOARD_DTYPE)
 
     def apply_fn(state, action):
         board = state.board.at[piece_idx, action].set(state.current_player)
@@ -478,7 +479,7 @@ def compile_sow(topology, num_players, initial_seeds=4, has_stores=True,
 
     def apply_fn(state, action):
         pit = action
-        cp = state.current_player
+        cp = state.current_player.astype(jnp.int32)
         seeds = state.seed_counts[pit]
         sc = state.seed_counts.at[pit].set(0)
         start_pos = track_pos[cp, pit]
