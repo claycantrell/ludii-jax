@@ -323,48 +323,35 @@ def compile(lud_text_or_path: str):
             piece_text = play_text
             for p in info.pieces:
                 piece_text += " " + info.piece_content.get(p.name, "")
-            # Direction indices for 8-dir grid (Ludii convention, row 0 = bottom):
-            # 0=N(up), 1=NE, 2=E(right), 3=SE, 4=S(down), 5=SW, 6=W(left), 7=NW
+            # Resolve direction restrictions from piece text and topology
             step_dirs = None
             hop_dirs = None
             if topo.max_neighbors == 8:
-                DIAG = [1, 3, 5, 7]
-                ORTHO = [0, 2, 4, 6]
-                # Per-player forward directions
-                P1_FWD = [0, 1, 7]       # N, NE, NW
-                P1_FWD_DIAG = [1, 7]     # NE, NW
-                P2_FWD = [4, 3, 5]       # S, SE, SW
-                P2_FWD_DIAG = [3, 5]     # SE, SW
-
+                T = BoardTopology  # use class constants
                 if "Diagonal" in piece_text and "Orthogonal" not in piece_text:
-                    step_dirs = DIAG
-                    hop_dirs = DIAG
+                    step_dirs = T.DIAG_DIRS
+                    hop_dirs = T.DIAG_DIRS
                 elif "Orthogonal" in piece_text and "Diagonal" not in piece_text:
-                    step_dirs = ORTHO
-                    hop_dirs = ORTHO
+                    step_dirs = T.ORTHO_DIRS
+                    hop_dirs = T.ORTHO_DIRS
 
                 has_forward = "Forward" in piece_text or (info.has_set_forward and ("FR" in piece_text or "FL" in piece_text))
                 if has_forward and info.has_set_forward:
-                    # Per-player direction: (p1_dirs, p2_dirs) tuple
-                    if step_dirs and set(step_dirs) == set(DIAG):
-                        step_dirs = (P1_FWD_DIAG, P2_FWD_DIAG)
+                    if step_dirs and set(step_dirs) == set(T.DIAG_DIRS):
+                        step_dirs = (T.P1_FWD_DIAG, T.P2_FWD_DIAG)
                     elif step_dirs:
-                        step_dirs = ([d for d in step_dirs if d in P1_FWD],
-                                     [d for d in step_dirs if d in P2_FWD])
+                        step_dirs = ([d for d in step_dirs if d in T.P1_FWD_DIRS],
+                                     [d for d in step_dirs if d in T.P2_FWD_DIRS])
                     else:
-                        step_dirs = (P1_FWD, P2_FWD)
-                    if hop_dirs and set(hop_dirs) == set(DIAG):
-                        hop_dirs = (P1_FWD_DIAG, P2_FWD_DIAG)
-                    else:
-                        hop_dirs = (P1_FWD_DIAG, P2_FWD_DIAG)
+                        step_dirs = (T.P1_FWD_DIRS, T.P2_FWD_DIRS)
+                    hop_dirs = (T.P1_FWD_DIAG, T.P2_FWD_DIAG)
                 elif has_forward:
-                    # Non-set_forward game: use P1 directions for all
-                    if step_dirs and set(step_dirs) == set(DIAG):
-                        step_dirs = P1_FWD_DIAG
+                    if step_dirs and set(step_dirs) == set(T.DIAG_DIRS):
+                        step_dirs = T.P1_FWD_DIAG
                     elif step_dirs:
-                        step_dirs = [d for d in step_dirs if d in P1_FWD]
+                        step_dirs = [d for d in step_dirs if d in T.P1_FWD_DIRS]
                     else:
-                        step_dirs = P1_FWD
+                        step_dirs = T.P1_FWD_DIRS
 
             has_chain = info.has_extra_turn and "moveAgain" in info.full_text and info.has_hop
             has_priority = "priority" in play_text and info.has_hop
@@ -484,7 +471,7 @@ def compile(lud_text_or_path: str):
         # Detect direction for custodial: Orthogonal = [0,2,4,6] on 8-dir boards
         cust_dirs = None
         if topo.max_neighbors == 8 and "Orthogonal" in info.full_text:
-            cust_dirs = [0, 2, 4, 6]
+            cust_dirs = BoardTopology.ORTHO_DIRS
         # Hostile cells: throne/centrePoint acts as friendly for custodial
         hostile = None
         if "centrePoint" in info.full_text:
@@ -494,7 +481,7 @@ def compile(lud_text_or_path: str):
                                                   directions=cust_dirs, hostile_cells=hostile))
     if "surround" in info.full_text.lower():
         corner_only = "Corners" in info.full_text or "corners" in info.full_text
-        surr_dirs = [0, 2, 4, 6] if topo.max_neighbors == 8 and "Orthogonal" in info.full_text else None
+        surr_dirs = BoardTopology.ORTHO_DIRS if topo.max_neighbors == 8 and "Orthogonal" in info.full_text else None
         effects.append(compile_surround_capture(topo, corner_only=corner_only, num_players=np,
                                                  directions=surr_dirs))
     if info.has_score:
@@ -551,48 +538,12 @@ def compile(lud_text_or_path: str):
         end_fns.append(compile_captured_all(np))
 
     if "is Connected" in end_text:
-        # Parse connected side sets from end text
-        import math as _math
+        # Build side map from topology
         side_map = {}
-        n_sites = topo.num_sites
-        cx = sum(x for x, _ in topo.site_coords) / n_sites
-        cy = sum(y for _, y in topo.site_coords) / n_sites
-        all_y = [y for _, y in topo.site_coords]
-        all_x = [x for x, _ in topo.site_coords]
-        min_y, max_y = min(all_y), max(all_y)
-        min_x, max_x = min(all_x), max(all_x)
-
-        # Find edge cells (fewer neighbors than internal cells)
-        nb_counts = [sum(1 for d in range(topo.max_neighbors) if int(topo.adjacency[d, i]) < n_sites) for i in range(n_sites)]
-        max_nbs = max(nb_counts)
-        edge_cells = [i for i in range(n_sites) if nb_counts[i] < max_nbs]
-
-        # Classify edge cells into sides by angle from center
-        # Hex sides: S(-120 to -60), SE(-60 to 0), NE(0 to 60), N(60 to 120), NW(120 to 180), SW(-180 to -120)
-        # Grid sides: S(bottom), N(top), E(right), W(left)
-        angle_ranges = {
-            "S": (-120, -60), "SE": (-60, 0), "NE": (0, 60),
-            "N": (60, 120), "NW": (120, 180), "SW": (-180, -120),
-        }
-        eps = 0.01
         for side_name in ["N", "S", "E", "W", "NE", "NW", "SE", "SW", "Top", "Bottom"]:
-            cells = []
-            if topo.max_neighbors == 6 and side_name in angle_ranges:
-                lo, hi = angle_ranges[side_name]
-                for i in edge_cells:
-                    x, y = topo.site_coords[i]
-                    angle = _math.atan2(y - cy, x - cx) * 180 / _math.pi
-                    if lo <= angle < hi or (side_name == "SW" and angle >= 180 - eps):
-                        cells.append(i)
-            else:
-                for i in range(n_sites):
-                    x, y = topo.site_coords[i]
-                    if side_name in ("N", "Top") and abs(y - max_y) < eps: cells.append(i)
-                    elif side_name in ("S", "Bottom") and abs(y - min_y) < eps: cells.append(i)
-                    elif side_name == "E" and abs(x - max_x) < eps: cells.append(i)
-                    elif side_name == "W" and abs(x - min_x) < eps: cells.append(i)
+            cells = topo.get_side_cells(side_name)
             if cells:
-                side_map[side_name] = set(cells)
+                side_map[side_name] = cells
 
         # Extract side pairs from end text
         side_pairs = []
