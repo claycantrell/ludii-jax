@@ -362,8 +362,9 @@ def compile(lud_text_or_path: str):
                     pi_step_dirs = step_dirs
                     pi_hop_dirs = hop_dirs
 
-                # Step to empty only when game has separate hop captures
-                step_to_empty = has_priority and info.has_hop
+                # Step to empty: forced-capture priority OR step-only games with explicit empty check
+                step_to_empty = (has_priority and info.has_hop) or \
+                    (info.has_step and not info.has_slide and "is Empty" in piece_text and "Step" in piece_text)
                 if info.has_step or (not info.has_hop and not info.has_slide and not info.has_leap):
                     l, a = compile_step(topo, slide_lookup, pi, np, directions=pi_step_dirs,
                                         reset_chain=has_chain,
@@ -394,10 +395,10 @@ def compile(lud_text_or_path: str):
                     pname = p.name if hasattr(p, 'name') else ''
                     pcontent = info.piece_content.get(pname, '')
 
-                    # Direction restriction: Orthogonal slide = 4 directions on 8-dir board
+                    # Direction restriction
                     if topo.max_neighbors == 8:
                         if "Orthogonal" in pcontent or ("Orthogonal" in piece_text and "Diagonal" not in pcontent):
-                            slide_dirs = [0, 2, 4, 6]  # N, E, S, W
+                            slide_dirs = BoardTopology.ORTHO_DIRS
 
                     # Blocked cells (throne in Tablut blocks non-king)
                     if "centrePoint" in info.full_text and "between" in info.full_text:
