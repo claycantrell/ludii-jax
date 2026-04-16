@@ -29,6 +29,67 @@ class BoardTopology:
         if self.site_valid is None:
             self.site_valid = np.ones(self.num_sites, dtype=bool)
 
+    def get_side_cells(self, side_name: str) -> set:
+        """Get cells on a named board side (N, S, E, W, NE, NW, SE, SW, Top, Bottom).
+
+        For hex boards, uses angle-based classification from board center.
+        For grid boards, uses coordinate extremes.
+        """
+        n = self.num_sites
+        if not self.site_coords or n == 0:
+            return set()
+
+        all_x = [x for x, _ in self.site_coords]
+        all_y = [y for _, y in self.site_coords]
+        min_x, max_x = min(all_x), max(all_x)
+        min_y, max_y = min(all_y), max(all_y)
+        cx = sum(all_x) / n
+        cy = sum(all_y) / n
+        eps = 0.01
+
+        # For hex boards: angle-based side classification
+        if self.max_neighbors == 6:
+            nb_counts = [sum(1 for d in range(self.max_neighbors)
+                             if int(self.adjacency[d, i]) < n) for i in range(n)]
+            max_nbs = max(nb_counts)
+            edge_cells = [i for i in range(n) if nb_counts[i] < max_nbs]
+
+            angle_ranges = {
+                "S": (-120, -60), "SE": (-60, 0), "NE": (0, 60),
+                "N": (60, 120), "NW": (120, 180), "SW": (-180, -120),
+            }
+            if side_name in angle_ranges:
+                lo, hi = angle_ranges[side_name]
+                cells = set()
+                for i in edge_cells:
+                    x, y = self.site_coords[i]
+                    angle = math.atan2(y - cy, x - cx) * 180 / math.pi
+                    if lo <= angle < hi or (side_name == "SW" and angle >= 180 - eps):
+                        cells.add(i)
+                return cells
+
+        # Grid boards: coordinate-based
+        cells = set()
+        for i in range(n):
+            x, y = self.site_coords[i]
+            if side_name in ("N", "Top") and abs(y - max_y) < eps:
+                cells.add(i)
+            elif side_name in ("S", "Bottom") and abs(y - min_y) < eps:
+                cells.add(i)
+            elif side_name == "E" and abs(x - max_x) < eps:
+                cells.add(i)
+            elif side_name == "W" and abs(x - min_x) < eps:
+                cells.add(i)
+        return cells
+
+    # Direction constants for 8-dir grids
+    DIAG_DIRS = [1, 3, 5, 7]      # NE, SE, SW, NW
+    ORTHO_DIRS = [0, 2, 4, 6]     # N, E, S, W
+    P1_FWD_DIRS = [0, 1, 7]       # N, NE, NW
+    P1_FWD_DIAG = [1, 7]          # NE, NW
+    P2_FWD_DIRS = [4, 3, 5]       # S, SE, SW
+    P2_FWD_DIAG = [3, 5]          # SE, SW
+
 
 def build_topology(board_text: str) -> BoardTopology:
     """Parse a Ludii board description and return a BoardTopology.

@@ -80,32 +80,14 @@ def build_game_state_class(info) -> tuple:
     defaults["phase_step_count"] = BOARD_DTYPE(0)
     defaults["previous_actions"] = -jnp.ones(np + 1, dtype=ACTION_DTYPE)
 
-    # Conditional fields
-    if info.has_capture:
-        fields.append("captured")
-        defaults["captured"] = jnp.zeros(n, dtype=jnp.bool_)
-
+    # Conditional fields — only allocate what the compiled game actually reads/writes
     if info.has_score:
         fields.append("scores")
         defaults["scores"] = jnp.zeros(np, dtype=REWARD_DTYPE)
 
-    if info.has_connected:
-        fields.append("connected_components")
-        defaults["connected_components"] = jnp.zeros((num_pieces, n), dtype=ACTION_DTYPE)
-
     if info.has_extra_turn:
         fields.append("extra_turn_fn_idx")
         defaults["extra_turn_fn_idx"] = ACTION_DTYPE(-1)
-        fields.append("can_move_again")
-        defaults["can_move_again"] = jnp.zeros((np, num_pieces, 5), dtype=jnp.bool_)  # 5 move types max
-
-    if info.has_promote:
-        fields.append("promoted")
-        defaults["promoted"] = jnp.zeros(n, dtype=jnp.bool_)
-
-    if info.has_hand:
-        fields.append("hand_pieces")
-        defaults["hand_pieces"] = jnp.zeros((np, num_pieces), dtype=BOARD_DTYPE)
 
     if info.has_sow:
         fields.append("seed_counts")
@@ -117,14 +99,10 @@ def build_game_state_class(info) -> tuple:
         fields.append("dice_values")
         defaults["dice_values"] = jnp.zeros(info.dice_count, dtype=BOARD_DTYPE)
 
-    if info.has_stacking:
-        max_stack = 8
-        fields.append("stack_pieces")
-        defaults["stack_pieces"] = jnp.full((n, max_stack), -1, dtype=BOARD_DTYPE)
-        fields.append("stack_owners")
-        defaults["stack_owners"] = jnp.full((n, max_stack), -1, dtype=BOARD_DTYPE)
-        fields.append("stack_heights")
-        defaults["stack_heights"] = jnp.zeros(n, dtype=BOARD_DTYPE)
+    # Stacking: not yet implemented (Connect Four, etc.)
+    # if info.has_stacking:
+    #     fields.append("stack_heights")
+    #     defaults["stack_heights"] = jnp.zeros(n, dtype=BOARD_DTYPE)
 
     # Build namedtuple
     GameState = namedtuple("GameState", fields,

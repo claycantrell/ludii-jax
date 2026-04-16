@@ -15,6 +15,12 @@ import numpy as np
 from ..runtime.state import BOARD_DTYPE, ACTION_DTYPE, EMPTY
 
 
+def _update_actions(state, dst, num_players):
+    """Update previous_actions with the destination cell. Used by all apply_fns."""
+    return state.previous_actions.at[state.current_player].set(
+        ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+
+
 def _build_dir_masks(directions, max_nb):
     """Build direction mask(s) from directions spec.
 
@@ -99,7 +105,7 @@ def compile_step(topology, slide_lookup, piece_idx, num_players, distance=1,
             board = jnp.where(should_promote,
                               board.at[promote_from, dst].set(EMPTY).at[promote_to, dst].set(state.current_player),
                               board)
-        pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+        pa = _update_actions(state, dst, num_players)
         if reset_chain:
             return state._replace(board=board, previous_actions=pa,
                                   extra_turn_fn_idx=ACTION_DTYPE(-1))
@@ -197,7 +203,7 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
                                   board.at[promote_from, dst].set(EMPTY).at[promote_to, dst].set(state.current_player),
                                   board)
 
-            pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+            pa = _update_actions(state, dst, num_players)
 
             if chain_capture:
                 dm = _get_dir_mask(state)
@@ -222,7 +228,7 @@ def compile_hop(topology, slide_lookup, hop_between, piece_idx, num_players,
             src, dst = action // n, action % n
             board = state.board.at[piece_idx, dst].set(state.current_player)
             board = board.at[piece_idx, src].set(EMPTY)
-            pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+            pa = _update_actions(state, dst, num_players)
             return state._replace(board=board, previous_actions=pa)
 
     return legal_fn, apply_fn
@@ -291,7 +297,7 @@ def compile_slide(topology, slide_lookup, piece_idx, num_players, max_distance=N
         src, dst = action // n, action % n
         board = state.board.at[piece_idx, dst].set(state.current_player)
         board = board.at[piece_idx, src].set(EMPTY)
-        pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+        pa = _update_actions(state, dst, num_players)
         return state._replace(board=board, previous_actions=pa)
 
     return legal_fn, apply_fn
@@ -340,14 +346,14 @@ def compile_leap(topology, piece_idx, num_players, offsets, capture=False):
             board = state.board.at[piece_idx, src].set(EMPTY)
             board = board.at[:, dst].set(EMPTY)
             board = board.at[piece_idx, dst].set(state.current_player)
-            pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+            pa = _update_actions(state, dst, num_players)
             return state._replace(board=board, previous_actions=pa)
     else:
         def apply_fn(state, action):
             src, dst = action // n, action % n
             board = state.board.at[piece_idx, dst].set(state.current_player)
             board = board.at[piece_idx, src].set(EMPTY)
-            pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(dst)).at[num_players].set(ACTION_DTYPE(dst))
+            pa = _update_actions(state, dst, num_players)
             return state._replace(board=board, previous_actions=pa)
 
     return legal_fn, apply_fn
@@ -362,7 +368,7 @@ def compile_place(topology, piece_idx, num_players):
 
     def apply_fn(state, action):
         board = state.board.at[piece_idx, action].set(state.current_player)
-        pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(action)).at[num_players].set(ACTION_DTYPE(action))
+        pa = _update_actions(state, action, num_players)
         return state._replace(board=board, previous_actions=pa)
 
     return legal_fn, apply_fn
@@ -527,7 +533,7 @@ def compile_dice_move(topology, piece_idx, num_players):
         new_pos = (old_pos + dice_sum) % n
         board = state.board.at[piece_idx, old_pos].set(EMPTY)
         board = board.at[piece_idx, new_pos].set(state.current_player)
-        pa = state.previous_actions.at[state.current_player].set(ACTION_DTYPE(new_pos)).at[num_players].set(ACTION_DTYPE(new_pos))
+        pa = _update_actions(state, new_pos, num_players)
         return state._replace(board=board, previous_actions=pa)
 
     return legal_fn, apply_fn
