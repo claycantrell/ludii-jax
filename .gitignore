@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -6,6 +7,29 @@ dist/
 build/
 .eggs/
 *.so
+
+# Environments
 .env
 .venv/
+env/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Java build artifacts
 tests/*.class
+
+# Large binaries (download separately)
+tests/Ludii.jar
+
+# Claude Code
+.claude/
