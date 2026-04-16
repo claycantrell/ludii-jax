@@ -11,7 +11,7 @@ state = env.init(jax.random.PRNGKey(0))
 state = env.step(state, action)
 ```
 
-**96% of all 1,212 Ludii games** compile and produce legal moves. **129 games** validated move-for-move against Ludii reference traces with zero divergence.
+**96% of all 1,212 Ludii games** compile and produce legal moves. **132 games** validated move-for-move against Ludii reference traces with zero divergence.
 
 ## Performance
 
