@@ -16,7 +16,7 @@ from .runtime.lookup import (
     build_slide_lookup, build_hop_between_lookup,
     build_line_indices, build_edge_mask,
 )
-from .runtime.state import build_game_state_class, BOARD_DTYPE, EMPTY
+from .runtime.state import build_game_state_class, BOARD_DTYPE, ACTION_DTYPE, EMPTY
 from .runtime.environment import Environment
 from .compiler.moves import (
     compile_step, compile_hop, compile_slide, compile_leap,
@@ -194,8 +194,10 @@ def compile(lud_text_or_path: str):
                     board = state.board.at[:, cell].set(EMPTY)
                     # Return to movement phase (phase 1) or placement (phase 0)
                     piece_count = (board != EMPTY).any(axis=0).sum()
-                    # Always return to movement phase (1) after removal
-                    return state._replace(board=board, phase_idx=BOARD_DTYPE(1))
+                    # Return to movement phase, clear last-to to prevent false mill detection
+                    pa = state.previous_actions.at[np].set(ACTION_DTYPE(-1))
+                    return state._replace(board=board, phase_idx=BOARD_DTYPE(1),
+                                          previous_actions=pa)
 
                 def multi_legal(state):
                     return jax.lax.switch(state.phase_idx.clip(0, 2),
@@ -219,7 +221,10 @@ def compile(lud_text_or_path: str):
                 _mill_lines = mill_line_idx
                 def phase_transition(state, action):
                     piece_count = (state.board != EMPTY).any(axis=0).sum()
-                    base_phase = jax.lax.select(piece_count >= _total, BOARD_DTYPE(1), BOARD_DTYPE(0))
+                    # Once in movement phase (1+), never regress to placement (0)
+                    was_movement = (state.phase_idx >= 1)
+                    base_phase = jax.lax.select(
+                        was_movement | (piece_count >= _total), BOARD_DTYPE(1), BOARD_DTYPE(0))
 
                     # Check if mover formed a NEW mill involving the last-moved cell
                     # Only during movement phase (phase 1), not placement
