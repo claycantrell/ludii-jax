@@ -465,120 +465,9 @@ def compile(lud_text_or_path: str):
                 legal_fn, apply_fn = compile_place(topo, piece_idx, np)
                 action_size = topo.num_sites
 
-    # Compile effects
-    effects = []
-    if "custodial" in info.full_text.lower():
-        # Detect direction for custodial: Orthogonal = [0,2,4,6] on 8-dir boards
-        cust_dirs = None
-        if topo.max_neighbors == 8 and "Orthogonal" in info.full_text:
-            cust_dirs = BoardTopology.ORTHO_DIRS
-        # Hostile cells: throne/centrePoint acts as friendly for custodial
-        hostile = None
-        if "centrePoint" in info.full_text:
-            hostile = jnp.zeros(topo.num_sites, dtype=jnp.bool_)
-            hostile = hostile.at[topo.num_sites // 2].set(True)
-        effects.append(compile_custodial_capture(topo, None, piece_idx, num_players=np,
-                                                  directions=cust_dirs, hostile_cells=hostile))
-    if "surround" in info.full_text.lower():
-        corner_only = "Corners" in info.full_text or "corners" in info.full_text
-        surr_dirs = BoardTopology.ORTHO_DIRS if topo.max_neighbors == 8 and "Orthogonal" in info.full_text else None
-        effects.append(compile_surround_capture(topo, corner_only=corner_only, num_players=np,
-                                                 directions=surr_dirs))
-    if info.has_score:
-        effects.append(compile_set_score(np))
-    effects_fn = chain_effects(effects)
+    effects_fn = _compile_effects(info, topo, piece_idx, np)
 
-    # Compile end conditions — use END section text, not full game text
-    end_fns = []
-    end_text = ""
-    rules_node = find_child(tree, "rules")
-    if rules_node:
-        rules_content = find_child(rules_node, "rules_content")
-        if rules_content:
-            for item in find_all(rules_content, "rules_item"):
-                end_node = find_child(item, "end")
-                if end_node:
-                    end_text = get_text(end_node)
-                    break
-    if not end_text:
-        end_text = info.full_text  # fallback
-
-    if "is Line" in end_text:
-        # Detect region exclusion: "not is In to sites Mover"
-        exclude_regions = None
-        if "not" in end_text and "sites Mover" in end_text:
-            # Build per-player starting region masks
-            import numpy as np_cpu
-            excl = np_cpu.zeros((np, topo.num_sites), dtype=bool)
-            for pi in range(np):
-                region_key = f"p{pi+1}"
-                if region_key in topo.regions:
-                    excl[pi] = topo.regions[region_key]
-                elif pi == 0 and "bottom" in topo.regions:
-                    excl[pi] = topo.regions["bottom"]
-                elif pi == 1 and "top" in topo.regions:
-                    excl[pi] = topo.regions["top"]
-            if excl.any():
-                exclude_regions = jnp.array(excl)
-
-        for m in re.finditer(r'is Line (\d+).*?result (\w+) (\w+)', end_text):
-            n_line = int(m.group(1))
-            outcome = m.group(3)
-            line_idx = build_line_indices(topo, n_line)
-            if outcome == "Win":
-                end_fns.append(compile_line_win(line_idx, piece_idx, np,
-                                                exclude_regions=exclude_regions))
-            elif outcome == "Loss":
-                end_fns.append(compile_line_loss(line_idx, piece_idx, np))
-
-    if "no Moves" in end_text or "no_legal" in end_text:
-        end_fns.append(compile_no_moves_loss(np))
-
-    if "no Pieces" in end_text or "count Pieces" in end_text:
-        end_fns.append(compile_captured_all(np))
-
-    if "is Connected" in end_text:
-        # Build side map from topology
-        side_map = {}
-        for side_name in ["N", "S", "E", "W", "NE", "NW", "SE", "SW", "Top", "Bottom"]:
-            cells = topo.get_side_cells(side_name)
-            if cells:
-                side_map[side_name] = cells
-
-        # Extract side pairs from end text
-        side_pairs = []
-        for m_conn in re.finditer(r'is Connected.*?result (\w+) (\w+)', end_text):
-            # Find sides mentioned between "is Connected" and "result"
-            snippet = end_text[m_conn.start():m_conn.end()]
-            sides_found = []
-            for sn in ["NE", "NW", "SE", "SW", "N", "S", "E", "W", "Top", "Bottom"]:
-                if f"Side {sn}" in snippet or f"sites {sn}" in snippet.replace("Side ", ""):
-                    if sn in side_map:
-                        sides_found.append(side_map[sn])
-            # Create pairs: connect first to each subsequent
-            if len(sides_found) >= 2:
-                side_pairs.append((sides_found[0], sides_found[-1]))
-
-        # Default: for hex boards, connect opposite sides
-        if not side_pairs and topo.max_neighbors == 6:
-            if "Top" in side_map and "Bottom" in side_map:
-                side_pairs.append((side_map["Top"], side_map["Bottom"]))
-            elif "N" in side_map and "S" in side_map:
-                side_pairs.append((side_map["N"], side_map["S"]))
-
-        if side_pairs:
-            end_fns.append(compile_connected_win(topo, side_pairs, piece_idx, np))
-
-    if "is Full" in end_text:
-        if "by_score" in end_text.lower() or "by Score" in end_text:
-            end_fns.append(compile_full_board_by_score(np))
-        else:
-            end_fns.append(compile_full_board_draw(np))
-
-    if not end_fns:
-        end_fns.append(compile_no_moves_loss(np))
-
-    end_fn = combine_end_conditions(end_fns, np)
+    end_fn = _compile_end_conditions(tree, info, topo, piece_idx, np)
 
     # Compose
     next_player_fn = make_alternating_player_fn(np)
@@ -602,6 +491,124 @@ def compile(lud_text_or_path: str):
         game_rules['addl_info_fn'] = addl_info_fn
 
     return Environment(game_rules, GameState, info)
+
+
+def _compile_effects(info, topo, piece_idx, num_players):
+    """Compile capture and score effects from game info."""
+    effects = []
+    if "custodial" in info.full_text.lower():
+        cust_dirs = None
+        if topo.max_neighbors == 8 and "Orthogonal" in info.full_text:
+            cust_dirs = BoardTopology.ORTHO_DIRS
+        hostile = None
+        if "centrePoint" in info.full_text:
+            hostile = jnp.zeros(topo.num_sites, dtype=jnp.bool_)
+            hostile = hostile.at[topo.num_sites // 2].set(True)
+        effects.append(compile_custodial_capture(topo, None, piece_idx,
+                       num_players=num_players, directions=cust_dirs,
+                       hostile_cells=hostile))
+    if "surround" in info.full_text.lower():
+        corner_only = "Corners" in info.full_text or "corners" in info.full_text
+        surr_dirs = BoardTopology.ORTHO_DIRS if topo.max_neighbors == 8 and "Orthogonal" in info.full_text else None
+        effects.append(compile_surround_capture(topo, corner_only=corner_only,
+                       num_players=num_players, directions=surr_dirs))
+    if info.has_score:
+        effects.append(compile_set_score(num_players))
+    return chain_effects(effects)
+
+
+def _compile_end_conditions(tree, info, topo, piece_idx, num_players):
+    """Compile end conditions from the END section of the parse tree."""
+    end_fns = []
+
+    # Extract end section text
+    end_text = ""
+    rules_node = find_child(tree, "rules")
+    if rules_node:
+        rules_content = find_child(rules_node, "rules_content")
+        if rules_content:
+            for item in find_all(rules_content, "rules_item"):
+                end_node = find_child(item, "end")
+                if end_node:
+                    end_text = get_text(end_node)
+                    break
+    if not end_text:
+        end_text = info.full_text
+
+    # Line of N
+    if "is Line" in end_text:
+        exclude_regions = None
+        if "not" in end_text and "sites Mover" in end_text:
+            import numpy as np_cpu
+            excl = np_cpu.zeros((num_players, topo.num_sites), dtype=bool)
+            for pi in range(num_players):
+                region_key = f"p{pi+1}"
+                if region_key in topo.regions:
+                    excl[pi] = topo.regions[region_key]
+                elif pi == 0 and "bottom" in topo.regions:
+                    excl[pi] = topo.regions["bottom"]
+                elif pi == 1 and "top" in topo.regions:
+                    excl[pi] = topo.regions["top"]
+            if excl.any():
+                exclude_regions = jnp.array(excl)
+
+        for m in re.finditer(r'is Line (\d+).*?result (\w+) (\w+)', end_text):
+            n_line = int(m.group(1))
+            outcome = m.group(3)
+            line_idx = build_line_indices(topo, n_line)
+            if outcome == "Win":
+                end_fns.append(compile_line_win(line_idx, piece_idx, num_players,
+                               exclude_regions=exclude_regions))
+            elif outcome == "Loss":
+                end_fns.append(compile_line_loss(line_idx, piece_idx, num_players))
+
+    # No legal moves
+    if "no Moves" in end_text or "no_legal" in end_text:
+        end_fns.append(compile_no_moves_loss(num_players))
+
+    # Piece count
+    if "no Pieces" in end_text or "count Pieces" in end_text:
+        end_fns.append(compile_captured_all(num_players))
+
+    # Connection
+    if "is Connected" in end_text:
+        side_map = {}
+        for side_name in ["N", "S", "E", "W", "NE", "NW", "SE", "SW", "Top", "Bottom"]:
+            cells = topo.get_side_cells(side_name)
+            if cells:
+                side_map[side_name] = cells
+
+        side_pairs = []
+        for m_conn in re.finditer(r'is Connected.*?result (\w+) (\w+)', end_text):
+            snippet = end_text[m_conn.start():m_conn.end()]
+            sides_found = []
+            for sn in ["NE", "NW", "SE", "SW", "N", "S", "E", "W", "Top", "Bottom"]:
+                if f"Side {sn}" in snippet or f"sites {sn}" in snippet.replace("Side ", ""):
+                    if sn in side_map:
+                        sides_found.append(side_map[sn])
+            if len(sides_found) >= 2:
+                side_pairs.append((sides_found[0], sides_found[-1]))
+
+        if not side_pairs and topo.max_neighbors == 6:
+            if "Top" in side_map and "Bottom" in side_map:
+                side_pairs.append((side_map["Top"], side_map["Bottom"]))
+            elif "N" in side_map and "S" in side_map:
+                side_pairs.append((side_map["N"], side_map["S"]))
+
+        if side_pairs:
+            end_fns.append(compile_connected_win(topo, side_pairs, piece_idx, num_players))
+
+    # Full board
+    if "is Full" in end_text:
+        if "by_score" in end_text.lower() or "by Score" in end_text:
+            end_fns.append(compile_full_board_by_score(num_players))
+        else:
+            end_fns.append(compile_full_board_draw(num_players))
+
+    if not end_fns:
+        end_fns.append(compile_no_moves_loss(num_players))
+
+    return combine_end_conditions(end_fns, num_players)
 
 
 def _build_start_fn(tree, info, topo):
